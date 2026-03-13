@@ -3,11 +3,12 @@ name: Deploy to AWS
 on:
   push:
     branches: [main]
+  workflow_dispatch:  # manual trigger from GitHub UI
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -16,22 +17,67 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: BOT_TOKEN,INSTAGRAM_SESSION_ID,INSTAGRAM_COOKIES
           script: |
-            cd ~/TelegramMediaBot
-            git pull origin main
+            set -e
+            REPO_DIR="$HOME/TelegramMediaBot"
 
-            # Write secrets to .env
-            cat > .env << EOF
-            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            INSTAGRAM_SESSION_ID=${{ secrets.INSTAGRAM_SESSION_ID }}
-            EOF
+            # ── First-time setup (idempotent — safe to re-run) ──────
 
-            # Write cookies file if secret is set
-            if [ -n "${{ secrets.INSTAGRAM_COOKIES }}" ]; then
-              echo '${{ secrets.INSTAGRAM_COOKIES }}' > cookies/instagram_cookies.txt
+            # Install Docker if missing
+            if ! command -v docker &> /dev/null; then
+              echo "📦 Installing Docker..."
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq docker.io docker-compose-v2 git
+              sudo usermod -aG docker $USER
+              sudo systemctl enable docker
+              sudo systemctl start docker
+              echo "✅ Docker installed"
             fi
 
-            docker compose up --build -d --force-recreate
-            docker image prune -f
+            # Clone repo if missing
+            if [ ! -d "$REPO_DIR" ]; then
+              echo "📥 Cloning repo..."
+              git clone https://github.com/${{ github.repository }}.git "$REPO_DIR"
+              echo "✅ Repo cloned"
+            fi
+
+            cd "$REPO_DIR"
+
+            # Ensure directories exist
+            mkdir -p cookies data/temp
+
+            # ── Update code ─────────────────────────────────────────
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            # ── Write secrets ───────────────────────────────────────
+
+            cat > .env << 'ENVEOF'
+            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
+            INSTAGRAM_SESSION_ID=${{ secrets.INSTAGRAM_SESSION_ID }}
+            ENVEOF
+
+            # Write cookies file
+            COOKIES='${{ secrets.INSTAGRAM_COOKIES }}'
+            if [ -n "$COOKIES" ]; then
+              echo "$COOKIES" > cookies/instagram_cookies.txt
+            fi
+
+            # ── Build and deploy ────────────────────────────────────
+
+            # Use sudo for docker if user isn't in docker group yet
+            # (first run after install — group change needs re-login)
+            if groups | grep -q docker; then
+              DOCKER="docker"
+            else
+              DOCKER="sudo docker"
+            fi
+
+            $DOCKER compose up --build -d --force-recreate
+            $DOCKER image prune -f
+
+            echo ""
             echo "✅ Deployed at $(date)"
+            echo "📋 Container status:"
+            $DOCKER compose ps

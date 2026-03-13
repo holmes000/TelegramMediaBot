@@ -117,74 +117,63 @@ INSTAGRAM_SESSION_ID=your-sessionid
 
 ## Deploy to AWS (EC2 + GitHub Actions)
 
-### One-time EC2 setup
+The GitHub Actions workflow handles **everything** — first-time server setup, code deployment, and secret management. No manual SSH required.
 
-```bash
-# 1. Launch EC2 instance
-#    AMI: Ubuntu 24.04 LTS
-#    Type: t3.small (2GB RAM for ffmpeg)
-#    Security group: outbound all, inbound SSH only
-#    Storage: 20 GB gp3
+### 1. Launch an EC2 instance
 
-# 2. SSH in and run setup
-ssh -i key.pem ubuntu@your-ip
-# Run setup-ec2.sh or manually:
-sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
-sudo usermod -aG docker $USER
-# Log out and back in
+In the AWS Console:
+- AMI: **Ubuntu 24.04 LTS**
+- Type: **t3.small** (2 GB RAM for ffmpeg)
+- Storage: **20 GB gp3**
+- Security group: **outbound all, inbound SSH (port 22)**
+- Create a key pair and download the `.pem` file
 
-# 3. Clone repo
-git clone git@github.com:YOUR_USERNAME/TelegramMediaBot.git ~/TelegramMediaBot
-cd ~/TelegramMediaBot
+No need to SSH in or install anything manually.
 
-# 4. Configure secrets
-cp .env.example .env
-nano .env  # Add BOT_TOKEN and INSTAGRAM_SESSION_ID
+### 2. Add GitHub Secrets
 
-# 5. Upload cookies
-# From your local machine:
-scp cookies/instagram_cookies.txt ubuntu@your-ip:~/TelegramMediaBot/cookies/
-
-# 6. First deploy
-docker compose up --build -d
-docker compose logs -f
-```
-
-### GitHub Actions auto-deploy
-
-Every push to `main` auto-deploys. Add these GitHub Secrets (repo → Settings → Secrets → Actions):
+Go to your repo → Settings → Secrets and variables → Actions → New repository secret:
 
 | Secret | Value |
 |---|---|
-| `EC2_HOST` | EC2 public IP |
+| `EC2_HOST` | EC2 public IP address |
 | `EC2_USER` | `ubuntu` |
-| `EC2_SSH_KEY` | Contents of your `.pem` key file |
-| `BOT_TOKEN` | Telegram bot token |
-| `INSTAGRAM_SESSION_ID` | Instagram sessionid |
-| `INSTAGRAM_COOKIES` | Full contents of cookies.txt |
+| `EC2_SSH_KEY` | Full contents of your `.pem` key file |
+| `BOT_TOKEN` | Telegram bot token from @BotFather |
+| `INSTAGRAM_SESSION_ID` | Instagram `sessionid` cookie value |
+| `INSTAGRAM_COOKIES` | Full contents of your cookies.txt file |
 
-Then just:
+### 3. Push to main
 
 ```bash
 git push origin main
-# GitHub Actions SSHes into EC2, pulls, rebuilds, restarts. ~2 minutes.
 ```
+
+That's it. The workflow will:
+1. SSH into the EC2 instance
+2. Install Docker and git (first run only)
+3. Clone the repo (first run only)
+4. Pull latest code
+5. Write `.env` and `cookies/instagram_cookies.txt` from secrets
+6. Build and start the Docker container
+
+Subsequent pushes skip the install steps and just update + redeploy (~2 minutes).
+
+You can also trigger a deploy manually from the Actions tab (workflow_dispatch).
 
 ### Maintenance
 
 ```bash
-# View logs
+# SSH in to check logs
+ssh -i key.pem ubuntu@your-ip
+cd ~/TelegramMediaBot
 docker compose logs --tail 100
-
-# Restart
-docker compose restart
 
 # Update yt-dlp inside container
 docker compose exec bot yt-dlp -U
 
-# Manual redeploy
-docker compose up --build -d --force-recreate
-docker image prune -f
+# Force redeploy from GitHub
+# Go to Actions tab → Deploy to AWS → Run workflow
 ```
 
 ## Updating Instagram Session
