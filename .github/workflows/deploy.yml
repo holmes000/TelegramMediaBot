@@ -2,7 +2,7 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:  # manual trigger from GitHub UI
 
 jobs:
@@ -48,8 +48,8 @@ jobs:
 
             # ── Update code ─────────────────────────────────────────
 
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin master
+            git reset --hard origin/master
 
             # ── Write secrets ───────────────────────────────────────
 
