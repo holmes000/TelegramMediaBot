@@ -1,39 +1,44 @@
 # TelegramMediaBot
 
-A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, slideshows, carousels, stories, and image-with-music posts — using **yt-dlp**, **gallery-dl**, **ffmpeg**, and the **Instagram private API**.
+A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, slideshows, carousels, stories, and image-with-music posts.
+
+**Instagram** uses the private (mobile) API via [instagrapi](https://github.com/subzeroid/instagrapi) — one API call gets everything.
+**TikTok** uses yt-dlp for videos and gallery-dl for photo slideshows.
+**ffmpeg** merges images + audio into slideshow videos when needed.
 
 ## Features
 
 | Content type | How it works | Disk I/O |
 |---|---|---|
-| TikTok / IG video | yt-dlp pipes stdout → Telegram | **None** (streamed) |
-| IG image post (no music) | gallery-dl extracts CDN URLs → Telegram `FromUri` | **None** |
-| IG image carousel (no music) | gallery-dl CDN URLs → album `FromUri` | **None** |
-| TikTok slideshow (images + audio) | gallery-dl download → ffmpeg merge → send file | Temp files |
-| IG image + music | gallery-dl image + instagrapi audio → ffmpeg merge | Temp files |
-| IG mixed carousel + music | gallery-dl all + instagrapi audio → ffmpeg slideshow → album | Temp files |
-| IG mixed carousel (no music) | gallery-dl all → send as mixed album | Temp files |
+| Instagram video / reel | instagrapi CDN URL → Telegram `FromUri` | **None** |
+| Instagram image (no music) | instagrapi CDN URL → Telegram `FromUri` | **None** |
+| Instagram carousel (no music) | instagrapi CDN URLs → album `FromUri` | **None** |
+| Instagram image + music | instagrapi image + audio → ffmpeg merge | Temp files |
+| Instagram carousel + music | instagrapi all + audio → ffmpeg slideshow + album | Temp files |
+| TikTok video | yt-dlp pipes stdout → Telegram | **None** (streamed) |
+| TikTok slideshow | gallery-dl images + audio → ffmpeg merge | Temp files |
+
+**Group chats:** The bot auto-deletes the sender's message containing the link and replies with just the media (requires admin + delete messages permission).
 
 ## Project Structure
 
 ```
 TelegramMediaBot/
-├── Models/                 Data models (BotConfig, DownloadResult, YtDlpMeta)
-├── Services/               Tool wrappers (YtDlp, Ffmpeg, GalleryDl, InstagramAudio, MediaDownload)
-├── Helpers/                Utilities (UrlHelper, FileTypeHelper, ProcessRunner)
+├── Models/                 BotConfig, DownloadResult, YtDlpMeta
+├── Services/               BotUpdateHandler, MediaDownloadService, InstagramService,
+│                           YtDlpService, GalleryDlService, FfmpegService
+├── Helpers/                UrlHelper, FileTypeHelper, ProcessRunner
 ├── scripts/
-│   └── ig_audio.py         Python script for Instagram private API audio extraction
-├── cookies/
-│   └── instagram_cookies.txt   ← Place your cookies here
-├── tools_bin/              Windows only: portable .exe files (yt-dlp, ffmpeg, gallery-dl)
-├── data/
-│   ├── temp/               Auto-created working directory (cleaned after each job)
-│   └── ig_session.json     Persisted instagrapi session
-├── BotUpdateHandler.cs     Telegram message handling
-├── Program.cs              Entry point + DI setup
-├── appsettings.json        Configuration
-├── Dockerfile              Production container
-└── TelegramMediaBot.csproj
+│   └── ig_media.py         Instagram private API (instagrapi) — extracts all media + audio
+├── cookies/                instagram_cookies.txt (gitignored)
+├── tools_bin/              Windows only: yt-dlp.exe, ffmpeg.exe, gallery-dl.exe
+├── data/                   temp/ (auto-cleaned), ig_session.json (gitignored)
+├── .github/workflows/      deploy.yml (GitHub Actions → EC2)
+├── Program.cs
+├── appsettings.json        Non-sensitive config only
+├── docker-compose.yml
+├── Dockerfile
+└── setup-ec2.sh            One-time EC2 setup script
 ```
 
 ## Quick Start
@@ -41,216 +46,159 @@ TelegramMediaBot/
 ### Prerequisites
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [Python 3](https://www.python.org/) + `pip install instagrapi requests`
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
 - [ffmpeg](https://ffmpeg.org/download.html)
 - [gallery-dl](https://github.com/mikf/gallery-dl) — `pip install gallery-dl`
-- [instagrapi](https://github.com/subzeroid/instagrapi) — `pip install instagrapi requests`
 
-### Windows Setup
+### Windows
 
 1. Download `yt-dlp.exe`, `ffmpeg.exe`, `gallery-dl.exe` into `tools_bin/`
-2. Install Python packages: `pip install gallery-dl instagrapi requests`
+2. `pip install instagrapi requests gallery-dl`
 3. Get a bot token from [@BotFather](https://t.me/BotFather)
-4. Edit `appsettings.json` — set `Token`
+4. Set environment variables:
+   ```
+   set Bot__Token=your-bot-token
+   set Bot__InstagramSessionId=your-sessionid
+   ```
 5. Export Instagram cookies → save as `cookies/instagram_cookies.txt`
-6. (Optional) Set `InstagramSessionId` for image-with-music audio support
-7. `dotnet run`
+6. `dotnet run`
 
-### Linux Setup
+### Linux
 
 ```bash
-# Install tools (Ubuntu/Debian)
 sudo apt install ffmpeg python3 python3-pip
 pip install yt-dlp gallery-dl instagrapi requests
 
-# Configure
-cp appsettings.json appsettings.json.bak
-# Edit appsettings.json — set Token, InstagramSessionId, etc.
+export Bot__Token="your-bot-token"
+export Bot__InstagramSessionId="your-sessionid"
 
-# Run
 dotnet run
 ```
 
 ## Configuration
 
-All settings are in `appsettings.json` under the `"Bot"` section.
-Every setting can be overridden via environment variables: `Bot__Token`, `Bot__CookiesFile`, etc.
+Non-sensitive settings live in `appsettings.json`. **All secrets come from environment variables** (never committed to git).
+
+**Environment variables (secrets):**
+
+| Variable | Description |
+|---|---|
+| `Bot__Token` | Telegram bot token (**required**) |
+| `Bot__InstagramSessionId` | Instagram sessionid cookie (for all IG content) |
+| `Bot__InstagramUsername` | Alternative: IG username (triggers 2FA) |
+| `Bot__InstagramPassword` | Alternative: IG password |
+
+**appsettings.json (non-sensitive):**
 
 | Setting | Default (Windows) | Default (Linux) | Description |
 |---|---|---|---|
-| `Token` | — | — | Telegram bot token (**required**) |
 | `YtDlpPath` | `tools_bin/yt-dlp.exe` | `yt-dlp` | Path to yt-dlp |
 | `FfmpegPath` | `tools_bin/ffmpeg.exe` | `ffmpeg` | Path to ffmpeg |
 | `GalleryDlPath` | `tools_bin/gallery-dl.exe` | `gallery-dl` | Path to gallery-dl |
-| `PythonPath` | `tools_bin/python.exe` | `python` | Path to Python |
+| `PythonPath` | `python` | `python3` | Path to Python |
 | `CookiesFile` | `cookies/instagram_cookies.txt` | same | Netscape cookies file |
-| `InstagramSessionId` | — | — | IG sessionid cookie (for image+music) |
-| `TempDir` | `data/temp` | same | Working directory for downloads |
+| `TempDir` | `data/temp` | same | Working directory |
 | `MaxFileSizeMb` | `50` | same | Max video size before sending as document |
 | `SlideshowImageDurationSec` | `3` | same | Seconds per image in slideshows |
-
-Leave tool paths empty (`""`) in appsettings.json to use platform defaults.
 
 ## Docker
 
 ```bash
-docker build -t media-bot .
-
-docker run -d \
-  --name media-bot \
-  -e Bot__Token="your-token" \
-  -e Bot__InstagramSessionId="your-sessionid" \
-  -v ./cookies:/app/cookies \
-  -v ./data:/app/data \
-  media-bot
+docker compose up --build -d
 ```
 
----
+Secrets go in `.env` (copy from `.env.example`, gitignored):
 
-## AWS Deployment
+```
+BOT_TOKEN=your-token
+INSTAGRAM_SESSION_ID=your-sessionid
+```
 
-### Option A: EC2 with Docker (simplest)
+## Deploy to AWS (EC2 + GitHub Actions)
 
-Best for: getting started, full control, low cost (~$5-10/mo with t3.micro).
+### One-time EC2 setup
 
 ```bash
 # 1. Launch EC2 instance
-#    - AMI: Ubuntu 24.04 LTS
-#    - Instance type: t3.micro (free tier) or t3.small
-#    - Security group: outbound all (no inbound needed — bot uses polling)
-#    - Storage: 20 GB gp3
+#    AMI: Ubuntu 24.04 LTS
+#    Type: t3.small (2GB RAM for ffmpeg)
+#    Security group: outbound all, inbound SSH only
+#    Storage: 20 GB gp3
 
-# 2. SSH in and install Docker
-sudo apt update && sudo apt install -y docker.io docker-compose-v2
+# 2. SSH in and run setup
+ssh -i key.pem ubuntu@your-ip
+# Run setup-ec2.sh or manually:
+sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
 sudo usermod -aG docker $USER
 # Log out and back in
 
-# 3. Clone/upload your project
-scp -r TelegramMediaBot/ ec2-user@your-ip:~/
+# 3. Clone repo
+git clone git@github.com:YOUR_USERNAME/TelegramMediaBot.git ~/TelegramMediaBot
+cd ~/TelegramMediaBot
 
-# 4. Create docker-compose.yml
-cat > docker-compose.yml << 'EOF'
-services:
-  bot:
-    build: .
-    restart: unless-stopped
-    environment:
-      - Bot__Token=your-telegram-bot-token
-      - Bot__InstagramSessionId=your-session-id
-    volumes:
-      - ./cookies:/app/cookies
-      - ./data:/app/data
-EOF
+# 4. Configure secrets
+cp .env.example .env
+nano .env  # Add BOT_TOKEN and INSTAGRAM_SESSION_ID
 
-# 5. Deploy
-cd TelegramMediaBot
-docker compose up -d --build
+# 5. Upload cookies
+# From your local machine:
+scp cookies/instagram_cookies.txt ubuntu@your-ip:~/TelegramMediaBot/cookies/
 
-# 6. Check logs
+# 6. First deploy
+docker compose up --build -d
 docker compose logs -f
 ```
 
-**Maintenance:**
-```bash
-# Update yt-dlp (inside container)
-docker compose exec bot yt-dlp -U
+### GitHub Actions auto-deploy
 
+Every push to `main` auto-deploys. Add these GitHub Secrets (repo → Settings → Secrets → Actions):
+
+| Secret | Value |
+|---|---|
+| `EC2_HOST` | EC2 public IP |
+| `EC2_USER` | `ubuntu` |
+| `EC2_SSH_KEY` | Contents of your `.pem` key file |
+| `BOT_TOKEN` | Telegram bot token |
+| `INSTAGRAM_SESSION_ID` | Instagram sessionid |
+| `INSTAGRAM_COOKIES` | Full contents of cookies.txt |
+
+Then just:
+
+```bash
+git push origin main
+# GitHub Actions SSHes into EC2, pulls, rebuilds, restarts. ~2 minutes.
+```
+
+### Maintenance
+
+```bash
 # View logs
 docker compose logs --tail 100
 
 # Restart
 docker compose restart
 
-# Redeploy after code changes
-docker compose up -d --build
+# Update yt-dlp inside container
+docker compose exec bot yt-dlp -U
+
+# Manual redeploy
+docker compose up --build -d --force-recreate
+docker image prune -f
 ```
-
-### Option B: ECS Fargate (serverless containers)
-
-Best for: hands-off operation, auto-restart, no EC2 management.
-
-```bash
-# 1. Install AWS CLI + configure credentials
-aws configure
-
-# 2. Create ECR repository
-aws ecr create-repository --repository-name media-bot --region us-east-1
-
-# 3. Build and push Docker image
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
-docker build -t media-bot .
-docker tag media-bot:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/media-bot:latest
-docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/media-bot:latest
-
-# 4. Create ECS cluster + task definition + service
-#    Use the AWS Console or Copilot CLI for easier setup:
-#    https://aws.github.io/copilot-cli/
-
-# Alternatively, use AWS Copilot (one-command deploy):
-brew install aws/tap/copilot-cli   # or snap install copilot-cli
-copilot init \
-  --app media-bot \
-  --name bot \
-  --type "Backend Service" \
-  --dockerfile ./Dockerfile
-
-copilot env init --name prod --profile default
-copilot deploy --name bot --env prod
-```
-
-**ECS Task Definition essentials:**
-- CPU: 256 (0.25 vCPU), Memory: 512 MB
-- No port mappings needed (bot uses polling, not webhooks)
-- Environment variables: `Bot__Token`, `Bot__InstagramSessionId`
-- EFS mount for `/app/data` and `/app/cookies` (persistent storage)
-
-### Option C: Lightsail Container (simplest AWS option)
-
-```bash
-# 1. Install Lightsail CLI plugin
-aws lightsail create-container-service \
-  --service-name media-bot \
-  --power micro \
-  --scale 1
-
-# 2. Push image
-aws lightsail push-container-image \
-  --service-name media-bot \
-  --label latest \
-  --image media-bot:latest
-
-# 3. Deploy with environment variables via Lightsail console
-```
-
-### Cost Comparison
-
-| Option | Monthly Cost | Pros | Cons |
-|---|---|---|---|
-| EC2 t3.micro | ~$8 | Full control, persistent storage | Manual updates |
-| EC2 t3.small | ~$15 | More headroom for ffmpeg | Manual updates |
-| ECS Fargate | ~$10-15 | Auto-restart, no server mgmt | Complex setup, EFS cost |
-| Lightsail | ~$7 | Simplest AWS option | Limited customization |
-
-### Recommended: EC2 t3.small + Docker Compose
-
-For a Telegram bot that does video processing (ffmpeg), `t3.small` (2 GB RAM) gives enough headroom.
-The bot uses polling (not webhooks), so no inbound ports or load balancers are needed — just outbound internet access.
-
----
 
 ## Updating Instagram Session
 
-When the `InstagramSessionId` expires (typically after a few months):
+The `InstagramSessionId` expires after a few months. To update:
 
-1. Open Instagram in your browser → Developer Tools → Application → Cookies
-2. Copy the value of the `sessionid` cookie
-3. Update `Bot__InstagramSessionId` in your config or environment variable
-4. Restart the bot
+1. Open Instagram in browser → DevTools → Application → Cookies → `sessionid`
+2. Update the `INSTAGRAM_SESSION_ID` GitHub Secret
+3. Push any commit (or re-run the deploy workflow)
 
 ## Notes
 
-- **Group chats**: Disable group privacy mode in @BotFather for the bot to see all messages
-- **yt-dlp updates**: Run `yt-dlp -U` periodically — TikTok/Instagram change their APIs often
-- **gallery-dl updates**: `pip install -U gallery-dl`
-- **Rate limiting**: The bot limits to 2 concurrent downloads per chat to prevent abuse
-- **Telegram file limit**: Videos over 50 MB are sent as documents
+- **Group chats:** Bot needs admin rights with "Delete Messages" permission. Disable group privacy mode in @BotFather.
+- **yt-dlp updates:** TikTok/Instagram change APIs often — run `yt-dlp -U` periodically
+- **Rate limiting:** Max 2 concurrent downloads per chat
+- **Telegram file limit:** Videos over 50 MB sent as documents
+- **Temp cleanup:** Orphaned temp files auto-cleaned every 30 minutes
