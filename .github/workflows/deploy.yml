@@ -3,7 +3,7 @@ name: Deploy to AWS
 on:
   push:
     branches: [master]
-  workflow_dispatch:  # manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -17,13 +17,13 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
+          envs: BOT_TOKEN,INSTAGRAM_SESSION_ID,INSTAGRAM_COOKIES
           script: |
             set -e
             REPO_DIR="$HOME/TelegramMediaBot"
 
-            # ── First-time setup (idempotent — safe to re-run) ──────
+            # ── First-time setup (idempotent) ─────────────────────
 
-            # Install Docker if missing
             if ! command -v docker &> /dev/null; then
               echo "📦 Installing Docker..."
               sudo apt-get update -qq
@@ -34,7 +34,6 @@ jobs:
               echo "✅ Docker installed"
             fi
 
-            # Clone repo if missing
             if [ ! -d "$REPO_DIR" ]; then
               echo "📥 Cloning repo..."
               git clone https://github.com/${{ github.repository }}.git "$REPO_DIR"
@@ -42,29 +41,23 @@ jobs:
             fi
 
             cd "$REPO_DIR"
-
-            # Ensure directories exist
             mkdir -p cookies data/temp
 
-            # ── Update code ─────────────────────────────────────────
+            # ── Update code ───────────────────────────────────────
 
             git fetch origin master
             git reset --hard origin/master
 
-            # ── Write secrets ───────────────────────────────────────
+            # ── Write secrets from env vars (never in script text) ─
 
-            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' '${{ secrets.BOT_TOKEN }}' '${{ secrets.INSTAGRAM_SESSION_ID }}' > .env
+            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$INSTAGRAM_SESSION_ID" > .env
 
-            # Write cookies file
-            COOKIES='${{ secrets.INSTAGRAM_COOKIES }}'
-            if [ -n "$COOKIES" ]; then
-              echo "$COOKIES" > cookies/instagram_cookies.txt
+            if [ -n "$INSTAGRAM_COOKIES" ]; then
+              printf '%s' "$INSTAGRAM_COOKIES" > cookies/instagram_cookies.txt
             fi
 
-            # ── Build and deploy ────────────────────────────────────
+            # ── Build and deploy ──────────────────────────────────
 
-            # Use sudo for docker if user isn't in docker group yet
-            # (first run after install — group change needs re-login)
             if groups | grep -q docker; then
               DOCKER="docker"
             else
@@ -78,3 +71,7 @@ jobs:
             echo "✅ Deployed at $(date)"
             echo "📋 Container status:"
             $DOCKER compose ps
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          INSTAGRAM_SESSION_ID: ${{ secrets.INSTAGRAM_SESSION_ID }}
+          INSTAGRAM_COOKIES: ${{ secrets.INSTAGRAM_COOKIES }}
