@@ -53,10 +53,7 @@ jobs:
 
             # ── Write secrets ───────────────────────────────────────
 
-            cat > .env << 'ENVEOF'
-            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            INSTAGRAM_SESSION_ID=${{ secrets.INSTAGRAM_SESSION_ID }}
-            ENVEOF
+            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' '${{ secrets.BOT_TOKEN }}' '${{ secrets.INSTAGRAM_SESSION_ID }}' > .env
 
             # Write cookies file
             COOKIES='${{ secrets.INSTAGRAM_COOKIES }}'
