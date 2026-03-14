@@ -40,7 +40,10 @@ jobs:
             -o publish/
 
       - name: Include scripts
-        run: cp -r scripts/ publish/scripts/
+        run: |
+          if [ ! -f publish/scripts/ig_media.py ]; then
+            cp -r scripts/ publish/scripts/
+          fi
 
       - name: Include config files
         run: |
