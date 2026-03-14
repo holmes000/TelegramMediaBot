@@ -18,7 +18,7 @@ A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, s
 | TikTok video | yt-dlp pipes stdout → Telegram | **None** (streamed) |
 | TikTok slideshow | gallery-dl images + audio → ffmpeg merge | Temp files |
 
-**Group chats:** The bot auto-deletes the sender's message containing the link and replies with just the media (requires admin + delete messages permission).
+**Group chats:** The bot auto-deletes the sender's message containing the link and sends just the media. Requires admin with "Delete Messages" permission.
 
 ## Project Structure
 
@@ -29,19 +29,20 @@ TelegramMediaBot/
 │                           YtDlpService, GalleryDlService, FfmpegService
 ├── Helpers/                UrlHelper, FileTypeHelper, ProcessRunner
 ├── scripts/
-│   └── ig_media.py         Instagram private API (instagrapi) — extracts all media + audio
+│   └── ig_media.py         Instagram private API — extracts all media + audio in one call
 ├── cookies/                instagram_cookies.txt (gitignored)
 ├── tools_bin/              Windows only: yt-dlp.exe, ffmpeg.exe, gallery-dl.exe
-├── data/                   temp/ (auto-cleaned), ig_session.json (gitignored)
-├── .github/workflows/      deploy.yml (GitHub Actions → EC2)
+├── data/                   temp/ (auto-cleaned every 30 min), ig_session.json (gitignored)
+├── .github/workflows/
+│   └── deploy.yml          GitHub Actions → EC2 (auto-setup + deploy)
 ├── Program.cs
 ├── appsettings.json        Non-sensitive config only
 ├── docker-compose.yml
 ├── Dockerfile
-└── setup-ec2.sh            One-time EC2 setup script
+└── .env.example            Template for secrets (gitignored when filled)
 ```
 
-## Quick Start
+## Quick Start (Local Development)
 
 ### Prerequisites
 
@@ -78,7 +79,7 @@ dotnet run
 
 ## Configuration
 
-Non-sensitive settings live in `appsettings.json`. **All secrets come from environment variables** (never committed to git).
+Non-sensitive settings live in `appsettings.json`. **All secrets come from environment variables** — nothing sensitive is ever committed to git.
 
 **Environment variables (secrets):**
 
@@ -86,53 +87,47 @@ Non-sensitive settings live in `appsettings.json`. **All secrets come from envir
 |---|---|
 | `Bot__Token` | Telegram bot token (**required**) |
 | `Bot__InstagramSessionId` | Instagram sessionid cookie (for all IG content) |
-| `Bot__InstagramUsername` | Alternative: IG username (triggers 2FA) |
+| `Bot__InstagramUsername` | Alternative: IG username |
 | `Bot__InstagramPassword` | Alternative: IG password |
 
-**appsettings.json (non-sensitive):**
+**appsettings.json (non-sensitive defaults):**
 
-| Setting | Default (Windows) | Default (Linux) | Description |
-|---|---|---|---|
-| `YtDlpPath` | `tools_bin/yt-dlp.exe` | `yt-dlp` | Path to yt-dlp |
-| `FfmpegPath` | `tools_bin/ffmpeg.exe` | `ffmpeg` | Path to ffmpeg |
-| `GalleryDlPath` | `tools_bin/gallery-dl.exe` | `gallery-dl` | Path to gallery-dl |
-| `PythonPath` | `python` | `python3` | Path to Python |
-| `CookiesFile` | `cookies/instagram_cookies.txt` | same | Netscape cookies file |
-| `TempDir` | `data/temp` | same | Working directory |
-| `MaxFileSizeMb` | `50` | same | Max video size before sending as document |
-| `SlideshowImageDurationSec` | `3` | same | Seconds per image in slideshows |
+| Setting | Default (Windows) | Default (Linux) |
+|---|---|---|
+| `YtDlpPath` | `tools_bin/yt-dlp.exe` | `yt-dlp` |
+| `FfmpegPath` | `tools_bin/ffmpeg.exe` | `ffmpeg` |
+| `GalleryDlPath` | `tools_bin/gallery-dl.exe` | `gallery-dl` |
+| `PythonPath` | `python` | `python3` |
+| `CookiesFile` | `cookies/instagram_cookies.txt` | same |
+| `TempDir` | `data/temp` | same |
+| `MaxFileSizeMb` | `50` | same |
+| `SlideshowImageDurationSec` | `3` | same |
 
-## Docker
+## Docker (Local)
 
 ```bash
+cp .env.example .env
+# Edit .env with your secrets
 docker compose up --build -d
-```
-
-Secrets go in `.env` (copy from `.env.example`, gitignored):
-
-```
-BOT_TOKEN=your-token
-INSTAGRAM_SESSION_ID=your-sessionid
+docker compose logs -f
 ```
 
 ## Deploy to AWS (EC2 + GitHub Actions)
 
-The GitHub Actions workflow handles **everything** — first-time server setup, code deployment, and secret management. No manual SSH required.
+The workflow handles **everything automatically** — first-time server setup, code deployment, and secret management. No manual SSH needed.
 
 ### 1. Launch an EC2 instance
 
 In the AWS Console:
-- AMI: **Ubuntu 24.04 LTS**
-- Type: **t3.small** (2 GB RAM for ffmpeg)
-- Storage: **20 GB gp3**
-- Security group: **outbound all, inbound SSH (port 22)**
+- **AMI:** Ubuntu 24.04 LTS
+- **Type:** t3.micro (free tier) or t3.small (more headroom for ffmpeg)
+- **Storage:** 20 GB gp3
+- **Security group:** outbound all, inbound SSH only (port 22)
 - Create a key pair and download the `.pem` file
-
-No need to SSH in or install anything manually.
 
 ### 2. Add GitHub Secrets
 
-Go to your repo → Settings → Secrets and variables → Actions → New repository secret:
+Go to your repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
 
 | Secret | Value |
 |---|---|
@@ -143,50 +138,70 @@ Go to your repo → Settings → Secrets and variables → Actions → New repos
 | `INSTAGRAM_SESSION_ID` | Instagram `sessionid` cookie value |
 | `INSTAGRAM_COOKIES` | Full contents of your cookies.txt file |
 
-### 3. Push to main
+Secrets are passed as environment variables to the SSH session — they never appear in workflow logs or script text.
+
+### 3. Push to master
 
 ```bash
-git push origin main
+git push origin master
 ```
 
-That's it. The workflow will:
+**First push** — the workflow will:
 1. SSH into the EC2 instance
-2. Install Docker and git (first run only)
-3. Clone the repo (first run only)
-4. Pull latest code
-5. Write `.env` and `cookies/instagram_cookies.txt` from secrets
-6. Build and start the Docker container
+2. Install Docker, docker-compose, and git
+3. Clone the repo
+4. Write `.env` and `cookies/instagram_cookies.txt` from secrets
+5. Build the Docker image and start the container
 
-Subsequent pushes skip the install steps and just update + redeploy (~2 minutes).
+**Subsequent pushes** skip install/clone and just pull + rebuild (~2 minutes).
 
-You can also trigger a deploy manually from the Actions tab (workflow_dispatch).
+You can also trigger a deploy manually: **Actions** tab → **Deploy to AWS** → **Run workflow**.
+
+### Viewing Logs
+
+Logs are in Docker on the EC2 instance (not CloudWatch):
+
+```bash
+ssh -i key.pem ubuntu@your-ec2-ip
+cd ~/TelegramMediaBot
+docker compose logs --tail 100
+docker compose logs -f  # live follow
+```
+
+Logs are capped at 10 MB (3 rotated files) to prevent disk fill.
 
 ### Maintenance
 
 ```bash
-# SSH in to check logs
-ssh -i key.pem ubuntu@your-ip
-cd ~/TelegramMediaBot
-docker compose logs --tail 100
-
 # Update yt-dlp inside container
 docker compose exec bot yt-dlp -U
 
-# Force redeploy from GitHub
-# Go to Actions tab → Deploy to AWS → Run workflow
+# Restart
+docker compose restart
+
+# Full rebuild
+docker compose up --build -d --force-recreate
+docker image prune -f
 ```
 
 ## Updating Instagram Session
 
 The `InstagramSessionId` expires after a few months. To update:
 
-1. Open Instagram in browser → DevTools → Application → Cookies → `sessionid`
-2. Update the `INSTAGRAM_SESSION_ID` GitHub Secret
-3. Push any commit (or re-run the deploy workflow)
+1. Open Instagram in browser → DevTools → Application → Cookies → copy `sessionid` value
+2. Update the `INSTAGRAM_SESSION_ID` secret in GitHub (repo → Settings → Secrets)
+3. Push any commit or re-run the deploy workflow from the Actions tab
+
+## Security
+
+- **No secrets in git** — all sensitive values come from GitHub Secrets → env vars → `.env` on EC2
+- **`.env` and cookies are gitignored** — never committed
+- **Secrets are passed as SSH env vars** — not inlined in workflow script text, can't leak in logs
+- **Workflow runs are safe to be public** — GitHub masks secret values with `***`
 
 ## Notes
 
-- **Group chats:** Bot needs admin rights with "Delete Messages" permission. Disable group privacy mode in @BotFather.
+- **Group chats:** Bot needs admin with "Delete Messages" permission. Disable group privacy in @BotFather.
 - **yt-dlp updates:** TikTok/Instagram change APIs often — run `yt-dlp -U` periodically
 - **Rate limiting:** Max 2 concurrent downloads per chat
 - **Telegram file limit:** Videos over 50 MB sent as documents
