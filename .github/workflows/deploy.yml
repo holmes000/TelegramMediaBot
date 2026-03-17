@@ -50,10 +50,12 @@ jobs:
 
             # ── Write secrets from env vars (never in script text) ─
 
-            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$INSTAGRAM_SESSION_ID" > .env
+            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$INSTAGRAM_SESSION_ID" | sudo tee .env > /dev/null
+            sudo chmod 644 .env
 
             if [ -n "$INSTAGRAM_COOKIES" ]; then
-              printf '%s' "$INSTAGRAM_COOKIES" > cookies/instagram_cookies.txt
+              printf '%s' "$INSTAGRAM_COOKIES" | sudo tee cookies/instagram_cookies.txt > /dev/null
+              sudo chmod 644 cookies/instagram_cookies.txt
             fi
 
             # ── Build and deploy ──────────────────────────────────
