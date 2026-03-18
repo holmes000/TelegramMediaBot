@@ -54,8 +54,14 @@ jobs:
             sudo chmod 644 .env
 
             if [ -n "$INSTAGRAM_COOKIES" ]; then
-              printf '%s' "$INSTAGRAM_COOKIES" | sudo tee cookies/instagram_cookies.txt > /dev/null
+              printf '%s\n' "$INSTAGRAM_COOKIES" | sudo tee cookies/instagram_cookies.txt > /dev/null
               sudo chmod 644 cookies/instagram_cookies.txt
+              # Validate: cookies.txt must have tab-separated lines
+              if ! grep -q '	' cookies/instagram_cookies.txt 2>/dev/null; then
+                echo "⚠️  Warning: cookies file may be malformed (no tabs found)"
+                echo "   GitHub Secrets may have stripped tab characters"
+                echo "   Upload cookies manually: scp cookies.txt ubuntu@host:~/TelegramMediaBot/cookies/instagram_cookies.txt"
+              fi
             fi
 
             # ── Build and deploy ──────────────────────────────────

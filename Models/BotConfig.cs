@@ -41,8 +41,23 @@ public sealed class BotConfig
         (!string.IsNullOrWhiteSpace(InstagramUsername) && !string.IsNullOrWhiteSpace(InstagramPassword)) ||
         File.Exists(IgSessionFile);
 
-    /// <summary>Returns true if a cookies file exists at the configured path.</summary>
-    public bool HasCookiesFile => File.Exists(CookiesFile);
+    /// <summary>Returns true if a valid Netscape cookies file exists.</summary>
+    public bool HasCookiesFile
+    {
+        get
+        {
+            if (!File.Exists(CookiesFile)) return false;
+            try
+            {
+                var firstLine = File.ReadLines(CookiesFile).FirstOrDefault() ?? "";
+                // Netscape cookies.txt starts with this header or a domain line with tabs
+                return firstLine.StartsWith("# Netscape HTTP Cookie") ||
+                       firstLine.StartsWith("# HTTP Cookie") ||
+                       firstLine.Contains('\t');
+            }
+            catch { return false; }
+        }
+    }
 
     /// <summary>
     /// Builds the yt-dlp / gallery-dl cookie argument string.

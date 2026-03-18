@@ -111,22 +111,64 @@ def main():
 
 
 def fetch_story(cl, url):
-    """Fetch a story using the story-specific API endpoints."""
-    story_pk = cl.story_pk_from_url(url)
-    err(f"Story PK: {story_pk}")
+    """Fetch story/stories from a story URL.
+    
+    Two formats:
+      - /stories/username/1234567890/ → single story by PK
+      - /stories/username/           → all active stories for that user
+    """
+    from urllib.parse import urlparse
 
-    story = cl.story_info(story_pk)
-    err(f"Story type: media_type={story.media_type}")
+    path = urlparse(url).path
+    parts = [p for p in path.split("/") if p and p != "stories"]
 
+    if not parts:
+        return {"error": "Could not parse story URL"}
+
+    username = parts[0]
+    story_pk = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+
+    if story_pk:
+        # Single story by PK
+        err(f"Story PK: {story_pk}")
+        story = cl.story_info(story_pk)
+        return story_to_result(story)
+    else:
+        # All active stories for user
+        err(f"Fetching all stories for @{username}")
+        try:
+            user_id = cl.user_id_from_username(username)
+        except Exception as e:
+            return {"error": f"User not found: {username} ({e})"}
+
+        stories = cl.user_stories(user_id)
+        if not stories:
+            return {"error": f"No active stories for @{username}"}
+
+        err(f"Found {len(stories)} active stories for @{username}")
+
+        media_items = []
+        for story in stories:
+            if story.media_type == 2 and story.video_url:
+                media_items.append({"type": "video", "url": str(story.video_url)})
+            elif story.thumbnail_url:
+                media_items.append({"type": "image", "url": str(story.thumbnail_url)})
+
+        if not media_items:
+            return {"error": "Could not extract any story media"}
+
+        return {"caption": f"@{username}", "items": media_items}
+
+
+def story_to_result(story):
+    """Convert a single Story object to our result format."""
     username = story.user.username if story.user else ""
     caption = f"@{username}" if username else None
     media_items = []
 
     if story.media_type == 2 and story.video_url:
-        # Video story
         media_items.append({"type": "video", "url": str(story.video_url)})
     elif story.thumbnail_url:
-        # Photo story
         media_items.append({"type": "image", "url": str(story.thumbnail_url)})
 
     if not media_items:
