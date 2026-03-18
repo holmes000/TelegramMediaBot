@@ -66,19 +66,7 @@ def main():
         try:
             # story_info returns a story object; convert to dict for extraction
             story_obj = cl.story_info(pk)
-            # Convert story objects (and nested attribute objects) to plain dicts
-            def obj_to_dict(o):
-                if o is None:
-                    return None
-                if isinstance(o, dict):
-                    return {k: obj_to_dict(v) for k, v in o.items()}
-                if isinstance(o, (list, tuple)):
-                    return [obj_to_dict(x) for x in o]
-                if hasattr(o, '__dict__'):
-                    return {k: obj_to_dict(v) for k, v in o.__dict__.items()}
-                return o
-
-            item = obj_to_dict(story_obj)
+            item = story_obj
         except Exception as e:
             out({"error": f"story_info failed: {e}"}); sys.exit(0)
     else:
@@ -103,7 +91,12 @@ def main():
             out({"error": "no items in response"}); sys.exit(0)
 
         item = items_raw[0]
-
+    # Normalize any instagrapi objects to plain dicts for the rest of the pipeline
+    try:
+        item = obj_to_dict(item)
+    except Exception:
+        # fall back to original item if conversion fails
+        pass
     try:
         result = extract_all(item)
     except Exception as e:
@@ -127,31 +120,47 @@ def extract_all(item):
 
     # Caption — username only, no description text
     user = item.get("user", {})
-    username = user.get("username", "")
+    username = user.get("username", "") if isinstance(user, dict) else ""
     caption = f"@{username}" if username else None
 
-    media_type = item.get("media_type")
-    product_type = item.get("product_type", "")
+    # Story-shaped objects (from extract_story_v1) expose video_url, thumbnail_url and 'medias'
+    if item.get("video_url") or item.get("thumbnail_url") or item.get("medias"):
+        if item.get("video_url"):
+            media_items.append({"type": "video", "url": item.get("video_url")})
+        if item.get("thumbnail_url") and not item.get("video_url"):
+            media_items.append({"type": "image", "url": item.get("thumbnail_url")})
 
-    # Carousel (media_type 8)
-    carousel = item.get("carousel_media")
-    if carousel:
-        for slide in carousel:
+        for slide in item.get("medias", []) or []:
             slide_type = slide.get("media_type")
-            if slide_type == 2:  # video
-                url = best_video_url(slide)
+            if slide_type == 2:
+                url = best_video_url(slide) or slide.get("video_url")
                 if url: media_items.append({"type": "video", "url": url})
-            else:  # image
-                url = best_image_url(slide)
+            else:
+                url = best_image_url(slide) or slide.get("thumbnail_url")
                 if url: media_items.append({"type": "image", "url": url})
-    elif media_type == 2 or product_type in ("clips", "igtv"):
-        # Single video / reel
-        url = best_video_url(item)
-        if url: media_items.append({"type": "video", "url": url})
     else:
-        # Single image
-        url = best_image_url(item)
-        if url: media_items.append({"type": "image", "url": url})
+        media_type = item.get("media_type")
+        product_type = item.get("product_type", "")
+
+        # Carousel (media_type 8)
+        carousel = item.get("carousel_media")
+        if carousel:
+            for slide in carousel:
+                slide_type = slide.get("media_type")
+                if slide_type == 2:  # video
+                    url = best_video_url(slide)
+                    if url: media_items.append({"type": "video", "url": url})
+                else:  # image
+                    url = best_image_url(slide)
+                    if url: media_items.append({"type": "image", "url": url})
+        elif media_type == 2 or product_type in ("clips", "igtv"):
+            # Single video / reel
+            url = best_video_url(item)
+            if url: media_items.append({"type": "video", "url": url})
+        else:
+            # Single image
+            url = best_image_url(item)
+            if url: media_items.append({"type": "image", "url": url})
 
     # Audio (post-level music)
     audio = extract_music(item)
@@ -289,6 +298,27 @@ def is_story_url(url):
     """Return True if the URL looks like an Instagram story URL."""
     if not url: return False
     return ("/stories/" in url) or ("/s/" in url) or ("/story" in url)
+
+
+def obj_to_dict(o):
+    """Recursively convert objects (instagrapi models) to plain JSON-serializable dicts/lists.
+
+    Handles dicts, lists/tuples, objects with __dict__, and basic types.
+    """
+    if o is None:
+        return None
+    if isinstance(o, dict):
+        return {k: obj_to_dict(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [obj_to_dict(x) for x in o]
+    # Some instagrapi model classes implement __dict__ or have _asdict-like behavior
+    if hasattr(o, "__dict__"):
+        try:
+            return {k: obj_to_dict(v) for k, v in o.__dict__.items()}
+        except Exception:
+            pass
+    # Fallback: basic types remain as-is
+    return o
 
 
 def out(obj):
