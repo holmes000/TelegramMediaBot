@@ -99,13 +99,20 @@ public sealed class BotUpdateHandler
 
     // ── Process a single URL ─────────────────────────────────────────
 
-    private async Task ProcessUrl(ITelegramBotClient bot, long chat, ReplyParameters reply, string url, CancellationToken ct)
+    private async Task ProcessUrl(ITelegramBotClient bot, long chat, ReplyParameters? reply, string url, CancellationToken ct)
     {
         var status = await bot.SendMessage(chat, "⏬ Downloading...", replyParameters: reply, cancellationToken: ct);
+
+        // Show "uploading" indicator periodically while processing
+        var typingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = SendTypingLoopAsync(bot, chat, typingCts.Token);
+
         DownloadResult? r = null;
         try
         {
             r = await _dl.ProcessUrlAsync(url, ct);
+            typingCts.Cancel();
+
             if (!r.Success) { await bot.EditMessageText(chat, status.MessageId, $"❌ {r.Error}", cancellationToken: ct); return; }
 
             // Dispatch to the right send method based on delivery type
@@ -124,6 +131,8 @@ public sealed class BotUpdateHandler
         }
         finally
         {
+            typingCts.Cancel();
+            typingCts.Dispose();
             if (r is not null) { _dl.CleanupWorkDir(r); r.Dispose(); }
         }
     }
@@ -285,5 +294,22 @@ public sealed class BotUpdateHandler
                 _chatLocks[chatId] = s = new SemaphoreSlim(2, 2);
             return s;
         }
+    }
+
+    /// <summary>
+    /// Sends "upload_video" chat action every 4 seconds until cancelled.
+    /// Telegram clears the indicator after 5 seconds, so we refresh it.
+    /// </summary>
+    private static async Task SendTypingLoopAsync(ITelegramBotClient bot, long chat, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await bot.SendChatAction(chat, Telegram.Bot.Types.Enums.ChatAction.UploadVideo, cancellationToken: ct);
+                await Task.Delay(4000, ct);
+            }
+        }
+        catch { }
     }
 }
