@@ -55,28 +55,42 @@ def main():
     cl = Client()
     if not login(cl, args):
         out({"error": "login failed"}); sys.exit(0)
-
-    try:
-        pk = cl.media_pk_from_url(args.url)
-    except Exception as e:
-        out({"error": f"bad URL: {e}"}); sys.exit(0)
-
-    # One API call — gets everything
-    try:
-        raw = cl.private_request(f"media/{pk}/info/")
-    except Exception as e:
-        err(f"API error: {e}")
-        # Fallback to parsed model
+    # Stories require a different API path in instagrapi. Use story_pk_from_url + story_info
+    # for stories, but keep the original media path unchanged for posts/reels.
+    if is_story_url(args.url):
         try:
-            raw = {"items": [cl.media_info_v1(pk).__dict__]}
-        except Exception as e2:
-            out({"error": f"API failed: {e}, fallback: {e2}"}); sys.exit(0)
+            pk = cl.story_pk_from_url(args.url)
+        except Exception as e:
+            out({"error": f"bad story URL: {e}"}); sys.exit(0)
 
-    items_raw = raw.get("items", [])
-    if not items_raw:
-        out({"error": "no items in response"}); sys.exit(0)
+        try:
+            # story_info returns a story object; convert to dict for extraction
+            story_obj = cl.story_info(pk)
+            item = story_obj.__dict__ if hasattr(story_obj, '__dict__') else story_obj
+        except Exception as e:
+            out({"error": f"story_info failed: {e}"}); sys.exit(0)
+    else:
+        try:
+            pk = cl.media_pk_from_url(args.url)
+        except Exception as e:
+            out({"error": f"bad URL: {e}"}); sys.exit(0)
 
-    item = items_raw[0]
+        # One API call — gets everything
+        try:
+            raw = cl.private_request(f"media/{pk}/info/")
+        except Exception as e:
+            err(f"API error: {e}")
+            # Fallback to parsed model
+            try:
+                raw = {"items": [cl.media_info_v1(pk).__dict__]}
+            except Exception as e2:
+                out({"error": f"API failed: {e}, fallback: {e2}"}); sys.exit(0)
+
+        items_raw = raw.get("items", [])
+        if not items_raw:
+            out({"error": "no items in response"}); sys.exit(0)
+
+        item = items_raw[0]
 
     try:
         result = extract_all(item)
@@ -257,6 +271,12 @@ def login(cl, args):
             err(f"Login failed: {e}")
 
     return False
+
+
+def is_story_url(url):
+    """Return True if the URL looks like an Instagram story URL."""
+    if not url: return False
+    return ("/stories/" in url) or ("/s/" in url) or ("/story" in url)
 
 
 def out(obj):

@@ -309,7 +309,7 @@ public sealed class MediaDownloadService
     {
         var dir = MakeWorkDir(job);
         var files = await _galleryDl.DownloadAsync(url, dir, ct);
-        if (files.Count == 0) return DownloadResult.Fail("gallery-dl downloaded nothing.");
+        if (files.Count == 0) return DownloadResult.Fail("No media files downloaded.");
 
         var vids = files.Where(FileTypeHelper.IsVideo).ToList();
         var imgs = files.Where(FileTypeHelper.IsImage).OrderBy(f => f).ToList();
