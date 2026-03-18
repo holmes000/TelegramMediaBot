@@ -13,6 +13,7 @@ public sealed class FfmpegService
 
     /// <summary>
     /// Merge images into an mp4 video, optionally with an audio track trimmed to clip range.
+    /// Optimized: ultrafast preset, 720p, multi-threaded, low framerate for stills.
     /// </summary>
     public async Task<string?> MergeImagesToVideoAsync(
         List<string> imagePaths, string? audioPath, string outputDir,
@@ -25,49 +26,55 @@ public sealed class FfmpegService
         var concatList = Path.Combine(outputDir, "concat_list.txt");
         var outputPath = Path.Combine(outputDir, "slideshow.mp4");
 
-        // Write concat list (filenames only — same directory)
-        var sb = new StringBuilder();
-        foreach (var img in imagePaths)
-        {
-            var name = Path.GetFileName(img).Replace("'", "'\\''");
-            sb.AppendLine($"file '{name}'");
-            sb.AppendLine($"duration {_cfg.SlideshowImageDurationSec}");
-        }
-        sb.AppendLine($"file '{Path.GetFileName(imagePaths[^1]).Replace("'", "'\\''")}'");
-        await File.WriteAllTextAsync(concatList, sb.ToString(), ct);
-
         var clipStartSec = audioClipStartMs / 1000.0;
         var clipDurationSec = audioClipDurationMs > 0 ? audioClipDurationMs / 1000.0 : 30.0;
+        var hasAudio = audioPath is not null && File.Exists(audioPath);
+
+        // Common video filter: 720p wide (fast encode, good for mobile), even height, yuv420p
+        const string vf = "scale=720:-2:force_original_aspect_ratio=decrease,pad=720:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p";
 
         var args = new StringBuilder();
-        var hasAudio = audioPath is not null && File.Exists(audioPath);
 
         if (hasAudio && imagePaths.Count == 1)
         {
-            // Single image: loop for audio duration, explicit -t to avoid hang
-            args.Append($"-y -loop 1 -i \"{imagePaths[0]}\" ");
+            // Single image + audio: 1fps looped still → ultrafast encode
+            args.Append($"-y -loop 1 -framerate 1 -i \"{imagePaths[0]}\" ");
             if (clipStartSec > 0) args.Append($"-ss {clipStartSec:F3} ");
             args.Append($"-i \"{audioPath}\" ");
-            args.Append("-vf \"scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p\" ");
-            args.Append("-c:v libx264 -preset fast -crf 23 -tune stillimage ");
-            args.Append("-c:a aac -b:a 192k ");
-            args.Append($"-t {clipDurationSec:F3} ");
-        }
-        else if (hasAudio)
-        {
-            // Multiple images + audio
-            args.Append($"-y -f concat -safe 0 -i \"{concatList}\" ");
-            if (clipStartSec > 0) args.Append($"-ss {clipStartSec:F3} ");
-            args.Append($"-i \"{audioPath}\" ");
-            args.Append("-vf \"scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p\" ");
-            args.Append("-fps_mode vfr -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k -shortest ");
+            args.Append($"-vf \"{vf}\" ");
+            args.Append("-c:v libx264 -preset ultrafast -crf 28 -tune stillimage -r 1 ");
+            args.Append("-c:a aac -b:a 128k ");
+            args.Append($"-t {clipDurationSec:F3} -threads 0 -movflags +faststart ");
         }
         else
         {
-            // No audio
+            // Multiple images (with or without audio): concat demuxer
+            var sb = new StringBuilder();
+            foreach (var img in imagePaths)
+            {
+                var name = Path.GetFileName(img).Replace("'", "'\\''");
+                sb.AppendLine($"file '{name}'");
+                sb.AppendLine($"duration {_cfg.SlideshowImageDurationSec}");
+            }
+            sb.AppendLine($"file '{Path.GetFileName(imagePaths[^1]).Replace("'", "'\\''")}'");
+            await File.WriteAllTextAsync(concatList, sb.ToString(), ct);
+
             args.Append($"-y -f concat -safe 0 -i \"{concatList}\" ");
-            args.Append("-vf \"scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p\" ");
-            args.Append("-fps_mode vfr -c:v libx264 -preset fast -crf 23 -an ");
+
+            if (hasAudio)
+            {
+                if (clipStartSec > 0) args.Append($"-ss {clipStartSec:F3} ");
+                args.Append($"-i \"{audioPath}\" ");
+                args.Append($"-vf \"{vf}\" ");
+                args.Append("-fps_mode vfr -c:v libx264 -preset ultrafast -crf 28 ");
+                args.Append("-c:a aac -b:a 128k -shortest -threads 0 -movflags +faststart ");
+            }
+            else
+            {
+                args.Append($"-vf \"{vf}\" ");
+                args.Append("-fps_mode vfr -c:v libx264 -preset ultrafast -crf 28 -an ");
+                args.Append("-threads 0 -movflags +faststart ");
+            }
         }
 
         args.Append($"\"{outputPath}\"");
@@ -81,7 +88,7 @@ public sealed class FfmpegService
     {
         Directory.CreateDirectory(outputDir);
         var outputPath = Path.Combine(outputDir, "reencoded.mp4");
-        var args = $"-y -i \"{inputPath}\" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k -movflags +faststart \"{outputPath}\"";
+        var args = $"-y -i \"{inputPath}\" -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k -threads 0 -movflags +faststart \"{outputPath}\"";
         var (exit, _, stderr) = await ProcessRunner.RunAsync(_cfg.FfmpegPath, args, ct);
         if (exit != 0) { _log.LogError("ffmpeg reencode failed: {Err}", stderr.Length > 200 ? stderr[..200] : stderr); return null; }
         return File.Exists(outputPath) ? outputPath : null;
