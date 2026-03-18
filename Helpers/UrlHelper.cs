@@ -5,7 +5,7 @@ namespace TelegramMediaBot.Helpers;
 public static partial class UrlHelper
 {
     private static readonly string[] SupportedDomains =
-        ["tiktok.com", "vm.tiktok.com", "instagram.com", "www.instagram.com", "ddinstagram.com", "www.tiktok.com"];
+        ["tiktok.com", "vm.tiktok.com", "vt.tiktok.com", "instagram.com", "www.instagram.com", "ddinstagram.com", "www.tiktok.com"];
 
     public static List<string> ExtractUrls(string? text)
     {
