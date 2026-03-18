@@ -33,6 +33,7 @@ public static partial class UrlHelper
                    url.Contains("/reel/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/reels/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/stories/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/s/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/tv/", StringComparison.OrdinalIgnoreCase);
         }
 
