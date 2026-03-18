@@ -19,6 +19,26 @@ public sealed class BotUpdateHandler
     public async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
         if (update.Message is not { } msg) return;
+
+        // Fire-and-forget so we don't block the polling loop.
+        // Each request runs concurrently, limited by per-chat semaphore.
+        _ = Task.Run(() => HandleMessageAsync(bot, msg, ct), ct);
+    }
+
+    private async Task HandleMessageAsync(ITelegramBotClient bot, Message msg, CancellationToken ct)
+    {
+        try
+        {
+            await HandleMessageCoreAsync(bot, msg, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Unhandled error for chat {Chat}", msg.Chat.Id);
+        }
+    }
+
+    private async Task HandleMessageCoreAsync(ITelegramBotClient bot, Message msg, CancellationToken ct)
+    {
         var chat = msg.Chat.Id;
         var text = msg.Text ?? msg.Caption ?? "";
 

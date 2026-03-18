@@ -17,7 +17,35 @@ public static partial class UrlHelper
     }
 
     public static bool IsSupportedUrl(string url) =>
-        SupportedDomains.Any(d => url.Contains(d, StringComparison.OrdinalIgnoreCase));
+        SupportedDomains.Any(d => url.Contains(d, StringComparison.OrdinalIgnoreCase)) &&
+        IsDirectContentUrl(url);
+
+    /// <summary>
+    /// Only accept URLs that point to specific content (post, reel, video, story).
+    /// Reject profile pages, home pages, explore pages, hashtag pages, etc.
+    /// </summary>
+    public static bool IsDirectContentUrl(string url)
+    {
+        // Instagram: must contain /p/, /reel/, /stories/, /tv/
+        if (IsInstagramUrl(url))
+        {
+            return url.Contains("/p/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/reel/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/reels/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/stories/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/tv/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // TikTok: must contain /video/, /photo/, or be a vm.tiktok.com short link
+        if (url.Contains("tiktok.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return url.Contains("/video/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("/photo/", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("vm.tiktok.com", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
 
     public static bool IsInstagramUrl(string url) =>
         url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase) ||
