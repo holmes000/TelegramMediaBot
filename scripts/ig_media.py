@@ -66,7 +66,19 @@ def main():
         try:
             # story_info returns a story object; convert to dict for extraction
             story_obj = cl.story_info(pk)
-            item = story_obj.__dict__ if hasattr(story_obj, '__dict__') else story_obj
+            # Convert story objects (and nested attribute objects) to plain dicts
+            def obj_to_dict(o):
+                if o is None:
+                    return None
+                if isinstance(o, dict):
+                    return {k: obj_to_dict(v) for k, v in o.items()}
+                if isinstance(o, (list, tuple)):
+                    return [obj_to_dict(x) for x in o]
+                if hasattr(o, '__dict__'):
+                    return {k: obj_to_dict(v) for k, v in o.__dict__.items()}
+                return o
+
+            item = obj_to_dict(story_obj)
         except Exception as e:
             out({"error": f"story_info failed: {e}"}); sys.exit(0)
     else:
