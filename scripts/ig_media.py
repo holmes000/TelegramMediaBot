@@ -56,34 +56,49 @@ def main():
     if not login(cl, args):
         out({"error": "login failed"}); sys.exit(0)
 
-    try:
-        pk = cl.media_pk_from_url(args.url)
-    except Exception as e:
-        out({"error": f"bad URL: {e}"}); sys.exit(0)
+    is_story = "/stories/" in args.url
+    is_highlight = "/s/" in args.url
 
-    # One API call — gets everything
-    try:
-        raw = cl.private_request(f"media/{pk}/info/")
-    except Exception as e:
-        err(f"API error: {e}")
-        # Fallback to parsed model
+    if is_story:
         try:
-            raw = {"items": [cl.media_info_v1(pk).__dict__]}
-        except Exception as e2:
-            out({"error": f"API failed: {e}, fallback: {e2}"}); sys.exit(0)
+            result = fetch_story(cl, args.url)
+        except Exception as e:
+            err(f"Story fetch failed: {e}")
+            import traceback; traceback.print_exc(file=sys.stderr)
+            out({"error": f"story failed: {e}"}); sys.exit(0)
+    elif is_highlight:
+        try:
+            result = fetch_highlight(cl, args.url)
+        except Exception as e:
+            err(f"Highlight fetch failed: {e}")
+            import traceback; traceback.print_exc(file=sys.stderr)
+            out({"error": f"highlight failed: {e}"}); sys.exit(0)
+    else:
+        # Regular post/reel/carousel
+        try:
+            pk = cl.media_pk_from_url(args.url)
+        except Exception as e:
+            out({"error": f"bad URL: {e}"}); sys.exit(0)
 
-    items_raw = raw.get("items", [])
-    if not items_raw:
-        out({"error": "no items in response"}); sys.exit(0)
+        try:
+            raw = cl.private_request(f"media/{pk}/info/")
+        except Exception as e:
+            err(f"API error: {e}")
+            try:
+                raw = {"items": [cl.media_info_v1(pk).__dict__]}
+            except Exception as e2:
+                out({"error": f"API failed: {e}, fallback: {e2}"}); sys.exit(0)
 
-    item = items_raw[0]
+        items_raw = raw.get("items", [])
+        if not items_raw:
+            out({"error": "no items in response"}); sys.exit(0)
 
-    try:
-        result = extract_all(item)
-    except Exception as e:
-        err(f"extract_all failed: {e}")
-        import traceback; traceback.print_exc(file=sys.stderr)
-        out({"error": f"extraction failed: {e}"}); sys.exit(0)
+        try:
+            result = extract_all(items_raw[0])
+        except Exception as e:
+            err(f"extract_all failed: {e}")
+            import traceback; traceback.print_exc(file=sys.stderr)
+            out({"error": f"extraction failed: {e}"}); sys.exit(0)
 
     # If download dir specified, download files to disk
     if args.download_dir and result.get("items"):
@@ -93,6 +108,87 @@ def main():
             err(f"download_files failed: {e}")
 
     out(result)
+
+
+def fetch_story(cl, url):
+    """Fetch a story using the story-specific API endpoints."""
+    story_pk = cl.story_pk_from_url(url)
+    err(f"Story PK: {story_pk}")
+
+    story = cl.story_info(story_pk)
+    err(f"Story type: media_type={story.media_type}")
+
+    username = story.user.username if story.user else ""
+    caption = f"@{username}" if username else None
+    media_items = []
+
+    if story.media_type == 2 and story.video_url:
+        # Video story
+        media_items.append({"type": "video", "url": str(story.video_url)})
+    elif story.thumbnail_url:
+        # Photo story
+        media_items.append({"type": "image", "url": str(story.thumbnail_url)})
+
+    if not media_items:
+        return {"error": "Could not extract story media"}
+
+    return {"caption": caption, "items": media_items}
+
+
+def fetch_highlight(cl, url):
+    """Fetch all stories from a highlight reel.
+    
+    Highlight URLs: instagram.com/s/aGlnaGxpZ2h0OjE3OTIwNDcyODE4OTYyMTQ0
+    The /s/ path contains a base64-encoded highlight ID.
+    """
+    import base64
+    from urllib.parse import urlparse
+
+    path = urlparse(url).path
+    # Extract the base64 part: /s/<base64>/
+    parts = [p for p in path.split("/") if p and p != "s"]
+    if not parts:
+        return {"error": "Could not parse highlight URL"}
+
+    # Decode: "aGlnaGxpZ2h0OjE3OTIwNDcyODE4OTYyMTQ0" → "highlight:17920472818962144"
+    try:
+        decoded = base64.urlsafe_b64decode(parts[0] + "==").decode("utf-8")
+        err(f"Highlight decoded: {decoded}")
+    except Exception:
+        # Might be a plain highlight ID or different format
+        decoded = parts[0]
+
+    # Extract the numeric PK
+    if decoded.startswith("highlight:"):
+        highlight_pk = decoded.split(":")[1]
+    else:
+        highlight_pk = decoded
+
+    err(f"Highlight PK: {highlight_pk}")
+
+    info = cl.highlight_info(int(highlight_pk))
+    err(f"Highlight: {info.title}, {info.media_count} items")
+
+    username = info.user.username if info.user else ""
+    caption = f"@{username}" if username else None
+    media_items = []
+
+    # Fetch each story in the highlight
+    for story_pk in (info.media_ids or []):
+        try:
+            story = cl.story_info(story_pk)
+            if story.media_type == 2 and story.video_url:
+                media_items.append({"type": "video", "url": str(story.video_url)})
+            elif story.thumbnail_url:
+                media_items.append({"type": "image", "url": str(story.thumbnail_url)})
+        except Exception as e:
+            err(f"Skipping story {story_pk}: {e}")
+
+    if not media_items:
+        return {"error": "No media found in highlight"}
+
+    err(f"Highlight: {len(media_items)} items extracted")
+    return {"caption": caption, "items": media_items}
 
 
 def extract_all(item):
