@@ -43,7 +43,7 @@ public static partial class UrlHelper
             return url.Contains("/video/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/photo/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("vm.tiktok.com", StringComparison.OrdinalIgnoreCase) ||
-                   url.Contains("vt.tiktok.com", StringComparison.OrdinalIgnoreCase);
+                   url.Contains("vt.tiktok.com", StringComparison.OrdinalIgnoreCase;
         }
 
         return false;
