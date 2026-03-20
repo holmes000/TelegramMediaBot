@@ -8,19 +8,19 @@ public sealed class GalleryDlService
 {
     private readonly BotConfig _cfg;
     private readonly ILogger<GalleryDlService> _log;
-    private readonly string _cookieArgs;
 
     public GalleryDlService(BotConfig cfg, ILogger<GalleryDlService> log)
     {
         _cfg = cfg;
         _log = log;
-        _cookieArgs = cfg.BuildCookieArgs();
     }
+
+    private string CookieArgs => _cfg.BuildSafeCookieArgs();
 
     /// <summary>Extract direct CDN URLs without downloading (fast, no disk I/O).</summary>
     public async Task<List<GalleryDlMediaItem>> GetMediaUrlsAsync(string url, CancellationToken ct)
     {
-        var (exit, stdout, stderr) = await Run($"--dump-json {_cookieArgs} \"{url}\"", ct);
+        var (exit, stdout, stderr) = await Run($"--dump-json {CookieArgs} \"{url}\"", ct);
         if (exit != 0) { _log.LogWarning("gallery-dl --dump-json failed: {Err}", Trunc(stderr)); return []; }
 
         var items = new List<GalleryDlMediaItem>();
@@ -67,7 +67,7 @@ public sealed class GalleryDlService
         Directory.CreateDirectory(outputDir);
         var args = new StringBuilder();
         args.Append($"-d \"{outputDir}\" -o filename={{num:>03}}.{{extension}} -o directory=[] --no-mtime ");
-        if (_cookieArgs.Length > 0) args.Append($"{_cookieArgs} ");
+        if (CookieArgs.Length > 0) args.Append($"{CookieArgs} ");
         args.Append($"\"{url}\"");
 
         var (exit, _, stderr) = await Run(args.ToString(), ct);

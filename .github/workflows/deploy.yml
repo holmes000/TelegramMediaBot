@@ -55,8 +55,8 @@ jobs:
               echo "$INSTAGRAM_COOKIES_B64" | base64 -d | sudo tee cookies/instagram_cookies.txt > /dev/null
               sudo chmod 644 cookies/instagram_cookies.txt
 
-              # Extract sessionid from cookies file (tab-separated, field 7 is value)
-              SESSION_ID=$(grep -i 'sessionid' cookies/instagram_cookies.txt | grep -v 'csrftoken\|ds_user\|rur' | awk -F'\t' '{print $NF}' | head -1)
+              # Extract sessionid value (field 6 = cookie name, field 7 = value)
+              SESSION_ID=$(awk -F'\t' '$6 == "sessionid" {print $7}' cookies/instagram_cookies.txt | head -1)
 
               if [ -n "$SESSION_ID" ]; then
                 echo "✅ Cookies written + sessionid extracted"

@@ -10,20 +10,23 @@ public sealed class YtDlpService
 {
     private readonly BotConfig _cfg;
     private readonly ILogger<YtDlpService> _log;
-    private readonly string _cookieArgs;
+    private readonly bool _hasCookies;
 
     public YtDlpService(BotConfig cfg, ILogger<YtDlpService> log)
     {
         _cfg = cfg;
         _log = log;
-        _cookieArgs = cfg.BuildCookieArgs();
-        if (_cookieArgs.Length > 0)
+        _hasCookies = cfg.HasCookiesFile || !string.IsNullOrWhiteSpace(cfg.CookiesFromBrowser);
+        if (_hasCookies)
             _log.LogInformation("yt-dlp cookie auth configured");
     }
 
+    /// <summary>Get a fresh copy of cookie args for each call (prevents yt-dlp from corrupting the original).</summary>
+    private string CookieArgs => _cfg.BuildSafeCookieArgs();
+
     public async Task<(YtDlpMeta? Meta, string? Error)> GetMetadataAsync(string url, CancellationToken ct)
     {
-        var args = $"--no-download --dump-json --no-warnings --no-playlist {_cookieArgs} \"{url}\"";
+        var args = $"--no-download --dump-json --no-warnings --no-playlist {CookieArgs} \"{url}\"";
         var (exit, stdout, stderr) = await Run(args, ct);
 
         if (exit != 0)
@@ -35,7 +38,7 @@ public sealed class YtDlpService
                 stderr.Contains("No video formats found", StringComparison.OrdinalIgnoreCase))
                 return (null, stderr);
 
-            args = $"--no-download --dump-json --no-warnings --flat-playlist {_cookieArgs} \"{url}\"";
+            args = $"--no-download --dump-json --no-warnings --flat-playlist {CookieArgs} \"{url}\"";
             (exit, stdout, stderr) = await Run(args, ct);
             if (exit != 0)
             {
@@ -63,7 +66,7 @@ public sealed class YtDlpService
     {
         Directory.CreateDirectory(outputDir);
         var tpl = Path.Combine(outputDir, "%(id)s_%(autonumber)s.%(ext)s");
-        var args = $"--no-warnings -o \"{tpl}\" --write-thumbnail --convert-thumbnails jpg --merge-output-format mp4 --no-playlist {_cookieArgs} \"{url}\"";
+        var args = $"--no-warnings -o \"{tpl}\" --write-thumbnail --convert-thumbnails jpg --merge-output-format mp4 --no-playlist {CookieArgs} \"{url}\"";
         var (exit, _, stderr) = await Run(args, ct);
         if (exit != 0) { _log.LogError("yt-dlp download failed: {Err}", Truncate(stderr, 200)); return []; }
         return [.. Directory.GetFiles(outputDir).OrderBy(f => f)];
@@ -73,7 +76,7 @@ public sealed class YtDlpService
     {
         Directory.CreateDirectory(outputDir);
         var tpl = Path.Combine(outputDir, "%(id)s_%(autonumber)s.%(ext)s");
-        var args = $"--no-warnings -o \"{tpl}\" --no-playlist {_cookieArgs} \"{url}\"";
+        var args = $"--no-warnings -o \"{tpl}\" --no-playlist {CookieArgs} \"{url}\"";
         var (exit, _, stderr) = await Run(args, ct);
         if (exit != 0) { _log.LogWarning("yt-dlp slideshow failed: {Err}", Truncate(stderr, 200)); return []; }
         return [.. Directory.GetFiles(outputDir).OrderBy(f => f)];
@@ -83,7 +86,7 @@ public sealed class YtDlpService
     {
         Directory.CreateDirectory(outputDir);
         var tpl = Path.Combine(outputDir, "audio.%(ext)s");
-        var args = $"--no-warnings -x --audio-format mp3 -o \"{tpl}\" --no-playlist {_cookieArgs} \"{url}\"";
+        var args = $"--no-warnings -x --audio-format mp3 -o \"{tpl}\" --no-playlist {CookieArgs} \"{url}\"";
         var (exit, _, _) = await Run(args, ct);
         if (exit != 0) return null;
         return Directory.GetFiles(outputDir, "audio.*").FirstOrDefault();
@@ -91,7 +94,7 @@ public sealed class YtDlpService
 
     public Process StartStreamingDownload(string url)
     {
-        var args = $"--no-warnings --no-playlist --merge-output-format mp4 {_cookieArgs} -o - \"{url}\"";
+        var args = $"--no-warnings --no-playlist --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
         _log.LogDebug("yt-dlp stream: {Args}", args);
         return ProcessRunner.StartProcess(_cfg.YtDlpPath, args);
     }

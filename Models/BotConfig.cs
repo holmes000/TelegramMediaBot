@@ -71,6 +71,29 @@ public sealed class BotConfig
         return "";
     }
 
+    /// <summary>
+    /// Creates a disposable copy of the cookies file and returns args pointing to it.
+    /// Prevents yt-dlp from overwriting the original cookies file.
+    /// Returns empty string if no cookies configured.
+    /// </summary>
+    public string BuildSafeCookieArgs()
+    {
+        if (HasCookiesFile)
+        {
+            try
+            {
+                Directory.CreateDirectory(TempDir);
+                var copy = Path.Combine(TempDir, $"cookies_{Guid.NewGuid():N}.txt");
+                File.Copy(CookiesFile, copy, overwrite: true);
+                return $"--cookies \"{copy}\"";
+            }
+            catch { return $"--cookies \"{CookiesFile}\""; }
+        }
+        if (!string.IsNullOrWhiteSpace(CookiesFromBrowser))
+            return $"--cookies-from-browser {CookiesFromBrowser}";
+        return "";
+    }
+
     private static string DefaultToolPath(string tool)
     {
         if (!OperatingSystem.IsWindows()) return tool;
