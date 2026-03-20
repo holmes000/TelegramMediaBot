@@ -218,6 +218,17 @@ public sealed class MediaDownloadService
 
         if (meta is null)
         {
+            // Login required = cookies are invalid/missing — don't retry, fail fast
+            var loginRequired =
+                err?.Contains("login required", StringComparison.OrdinalIgnoreCase) == true ||
+                err?.Contains("rate-limit reached", StringComparison.OrdinalIgnoreCase) == true;
+
+            if (loginRequired)
+            {
+                _log.LogWarning("[{Job}] Login required — cookies may be invalid", job);
+                return DownloadResult.Fail("Instagram requires login. Cookies may be expired or missing.");
+            }
+
             var cantHandle =
                 err?.Contains("Unsupported URL", StringComparison.OrdinalIgnoreCase) == true ||
                 err?.Contains("no video", StringComparison.OrdinalIgnoreCase) == true ||
