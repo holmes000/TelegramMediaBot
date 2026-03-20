@@ -45,10 +45,13 @@ public sealed class MediaDownloadService
             cts.CancelAfter(TimeSpan.FromMinutes(2));
             var timeout = cts.Token;
 
-            // ── Instagram → private API (one call, fastest) ──────────
-            if (UrlHelper.IsInstagramUrl(url) && _ig.IsAvailable)
+            // ── Instagram stories/highlights → private API only ────
+            //    (yt-dlp and gallery-dl can't handle these)
+            if (UrlHelper.NeedsPrivateApi(url))
             {
-                _log.LogInformation("[{Job}] Instagram → private API", job);
+                if (!_ig.IsAvailable)
+                    return DownloadResult.Fail("Stories/highlights require Instagram login. Set Bot__InstagramSessionId.");
+                _log.LogInformation("[{Job}] Instagram story/highlight → private API", job);
                 return await ViaInstagramApi(url, job, timeout);
             }
 
@@ -59,7 +62,9 @@ public sealed class MediaDownloadService
                 return await ViaGalleryDl(url, job, null, timeout);
             }
 
-            // ── Everything else → yt-dlp ─────────────────────────────
+            // ── Everything else (IG posts/reels, TikTok videos) → yt-dlp
+            //    Falls back to gallery-dl if yt-dlp fails (e.g. image posts)
+            //    Falls back to instagrapi for IG image+music if available
             return await ViaYtDlp(url, job, timeout);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -298,6 +303,18 @@ public sealed class MediaDownloadService
             return await ViaGalleryDlDisk(url, job, caption, ct);
         }
 
+        // Instagram images without audio from gallery-dl — check if post has music via private API
+        if (hasImages && !hasAudio && UrlHelper.IsInstagramUrl(url) && _ig.IsAvailable)
+        {
+            _log.LogInformation("[{Job}] IG images — checking for audio via private API", job);
+            var igInfo = await _ig.GetMediaInfoAsync(url, ct);
+            if (igInfo is { HasAudio: true, HasImages: true })
+            {
+                _log.LogInformation("[{Job}] Post has music → merging via private API", job);
+                return await ViaInstagramApiDisk(igInfo, job, ct);
+            }
+        }
+
         var urls = items.Where(i => i.Category is "image" or "video").Select(i => (i.Url, i.Category)).ToList();
         if (urls.Count == 0) return DownloadResult.Fail("No media found.");
 
@@ -309,7 +326,7 @@ public sealed class MediaDownloadService
     {
         var dir = MakeWorkDir(job);
         var files = await _galleryDl.DownloadAsync(url, dir, ct);
-        if (files.Count == 0) return DownloadResult.Fail("Could not download any media.");
+        if (files.Count == 0) return DownloadResult.Fail("gallery-dl downloaded nothing.");
 
         var vids = files.Where(FileTypeHelper.IsVideo).ToList();
         var imgs = files.Where(FileTypeHelper.IsImage).OrderBy(f => f).ToList();

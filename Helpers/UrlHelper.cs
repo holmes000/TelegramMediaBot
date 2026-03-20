@@ -43,7 +43,7 @@ public static partial class UrlHelper
             return url.Contains("/video/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("/photo/", StringComparison.OrdinalIgnoreCase) ||
                    url.Contains("vm.tiktok.com", StringComparison.OrdinalIgnoreCase) ||
-                   url.Contains("vt.tiktok.com", StringComparison.OrdinalIgnoreCase);
+				   url.Contains("vt.tiktok.com", StringComparison.OrdinalIgnoreCase);
         }
 
         return false;
@@ -52,6 +52,15 @@ public static partial class UrlHelper
     public static bool IsInstagramUrl(string url) =>
         url.Contains("instagram.com", StringComparison.OrdinalIgnoreCase) ||
         url.Contains("ddinstagram.com", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Content that only the private API (instagrapi) can handle.
+    /// yt-dlp and gallery-dl don't support stories or highlights.
+    /// </summary>
+    public static bool NeedsPrivateApi(string url) =>
+        IsInstagramUrl(url) &&
+        (url.Contains("/stories/", StringComparison.OrdinalIgnoreCase) ||
+         url.Contains("/s/", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// URLs known to be photo/slideshow that yt-dlp can't handle.
