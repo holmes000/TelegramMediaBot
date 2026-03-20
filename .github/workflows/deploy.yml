@@ -17,7 +17,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: BOT_TOKEN,INSTAGRAM_SESSION_ID,INSTAGRAM_COOKIES
+          envs: BOT_TOKEN,INSTAGRAM_COOKIES_B64
           script: |
             set -e
             REPO_DIR="$HOME/TelegramMediaBot"
@@ -48,21 +48,27 @@ jobs:
             git fetch origin master
             git reset --hard origin/master
 
-            # ── Write secrets from env vars (never in script text) ─
+            # ── Write cookies from base64 and extract sessionid ───
 
-            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$INSTAGRAM_SESSION_ID" | sudo tee .env > /dev/null
-            sudo chmod 644 .env
-
-            if [ -n "$INSTAGRAM_COOKIES" ]; then
-              printf '%s\n' "$INSTAGRAM_COOKIES" | sudo tee cookies/instagram_cookies.txt > /dev/null
+            SESSION_ID=""
+            if [ -n "$INSTAGRAM_COOKIES_B64" ]; then
+              echo "$INSTAGRAM_COOKIES_B64" | base64 -d | sudo tee cookies/instagram_cookies.txt > /dev/null
               sudo chmod 644 cookies/instagram_cookies.txt
-              # Validate: cookies.txt must have tab-separated lines
-              if ! grep -q '	' cookies/instagram_cookies.txt 2>/dev/null; then
-                echo "⚠️  Warning: cookies file may be malformed (no tabs found)"
-                echo "   GitHub Secrets may have stripped tab characters"
-                echo "   Upload cookies manually: scp cookies.txt ubuntu@host:~/TelegramMediaBot/cookies/instagram_cookies.txt"
+
+              # Extract sessionid from cookies file (tab-separated, field 7 is value)
+              SESSION_ID=$(grep -i 'sessionid' cookies/instagram_cookies.txt | grep -v 'csrftoken\|ds_user\|rur' | awk -F'\t' '{print $NF}' | head -1)
+
+              if [ -n "$SESSION_ID" ]; then
+                echo "✅ Cookies written + sessionid extracted"
+              else
+                echo "⚠️  Cookies written but sessionid not found in file"
               fi
             fi
+
+            # ── Write .env ────────────────────────────────────────
+
+            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$SESSION_ID" | sudo tee .env > /dev/null
+            sudo chmod 644 .env
 
             # ── Build and deploy ──────────────────────────────────
 
@@ -81,5 +87,4 @@ jobs:
             $DOCKER compose ps
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          INSTAGRAM_SESSION_ID: ${{ secrets.INSTAGRAM_SESSION_ID }}
-          INSTAGRAM_COOKIES: ${{ secrets.INSTAGRAM_COOKIES }}
+          INSTAGRAM_COOKIES_B64: ${{ secrets.INSTAGRAM_COOKIES_B64 }}

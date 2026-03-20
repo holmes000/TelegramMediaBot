@@ -135,8 +135,19 @@ Go to your repo → **Settings** → **Secrets and variables** → **Actions** �
 | `EC2_USER` | `ubuntu` |
 | `EC2_SSH_KEY` | Full contents of your `.pem` key file |
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
-| `INSTAGRAM_SESSION_ID` | Instagram `sessionid` cookie value |
-| `INSTAGRAM_COOKIES` | Full contents of your cookies.txt file |
+| `INSTAGRAM_COOKIES_B64` | Base64-encoded cookies.txt (see below) |
+
+**To create `INSTAGRAM_COOKIES_B64`:**
+
+```bash
+# Linux/Mac:
+base64 -w 0 cookies/instagram_cookies.txt
+
+# Windows (PowerShell):
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies\instagram_cookies.txt"))
+```
+
+Copy the output and paste it as the secret value. Base64 preserves all tabs, spaces, and newlines perfectly. The `sessionid` is automatically extracted from the cookies file during deploy — no separate secret needed.
 
 Secrets are passed as environment variables to the SSH session — they never appear in workflow logs or script text.
 
@@ -184,13 +195,23 @@ docker compose up --build -d --force-recreate
 docker image prune -f
 ```
 
-## Updating Instagram Session
+## Updating Instagram Cookies
 
-The `InstagramSessionId` expires after a few months. To update:
+Instagram cookies expire after a few months. To refresh:
 
-1. Open Instagram in browser → DevTools → Application → Cookies → copy `sessionid` value
-2. Update the `INSTAGRAM_SESSION_ID` secret in GitHub (repo → Settings → Secrets)
-3. Push any commit or re-run the deploy workflow from the Actions tab
+1. Log into Instagram in your browser
+2. Export cookies using "Get cookies.txt LOCALLY" browser extension
+3. Re-encode as base64:
+   ```bash
+   # Linux/Mac:
+   base64 -w 0 cookies.txt
+   # Windows PowerShell:
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))
+   ```
+4. Update the `INSTAGRAM_COOKIES_B64` secret in GitHub (repo → Settings → Secrets)
+5. Push any commit or re-run the deploy workflow
+
+The `sessionid` is automatically extracted from the cookies file — no separate secret needed.
 
 ## Security
 
