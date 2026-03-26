@@ -5,20 +5,16 @@ on:
     branches: [master]
   workflow_dispatch:
 
-env:
-  BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-  INSTAGRAM_COOKIES_B64: ${{ secrets.INSTAGRAM_COOKIES_B64 }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      INSTAGRAM_COOKIES_B64: ${{ secrets.INSTAGRAM_COOKIES_B64 }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          INSTAGRAM_COOKIES_B64: ${{ secrets.INSTAGRAM_COOKIES_B64 }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
@@ -67,7 +63,6 @@ jobs:
               LINES=$(wc -l < cookies/instagram_cookies.txt)
               echo "✅ Cookies written ($LINES lines)"
 
-              # Extract sessionid value (field 6 = cookie name, field 7 = value)
               SESSION_ID=$(awk -F'\t' '$6 == "sessionid" {print $7}' cookies/instagram_cookies.txt | tr -d '\r' | head -1)
 
               if [ -n "$SESSION_ID" ]; then
