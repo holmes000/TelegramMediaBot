@@ -45,13 +45,10 @@ public sealed class MediaDownloadService
             cts.CancelAfter(TimeSpan.FromMinutes(2));
             var timeout = cts.Token;
 
-            // ── Instagram stories/highlights → private API only ────
-            //    (yt-dlp and gallery-dl can't handle these)
-            if (UrlHelper.NeedsPrivateApi(url))
+            // ── NEW: ALL Instagram URLs go to the Cobalt API ────
+            if (UrlHelper.IsInstagramUrl(url))
             {
-                if (!_ig.IsAvailable)
-                    return DownloadResult.Fail("Stories/highlights require Instagram login. Set Bot__InstagramSessionId.");
-                _log.LogInformation("[{Job}] Instagram story/highlight → private API", job);
+                _log.LogInformation("[{Job}] Instagram URL → Cobalt API", job);
                 return await ViaInstagramApi(url, job, timeout);
             }
 
@@ -62,9 +59,7 @@ public sealed class MediaDownloadService
                 return await ViaGalleryDl(url, job, null, timeout);
             }
 
-            // ── Everything else (IG posts/reels, TikTok videos) → yt-dlp
-            //    Falls back to gallery-dl if yt-dlp fails (e.g. image posts)
-            //    Falls back to instagrapi for IG image+music if available
+            // ── Everything else (TikTok videos) → yt-dlp
             return await ViaYtDlp(url, job, timeout);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
