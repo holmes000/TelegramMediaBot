@@ -95,13 +95,14 @@ public sealed class MediaDownloadService
 
     private async Task<DownloadResult> ViaInstagramApi(string url, string job, CancellationToken ct)
     {
-        // Single API call — gets all URLs + audio info
         var info = await _ig.GetMediaInfoAsync(url, ct);
 
         if (info.HasError)
         {
-            _log.LogWarning("[{Job}] Instagram API error: {Err} — falling back to gallery-dl", job, info.Error);
-            return await ViaGalleryDl(url, job, null, ct);
+            // ── WE STOP HERE NOW ──
+            // Do NOT fallback to gallery-dl, because gallery-dl cannot scrape Instagram without cookies.
+            _log.LogWarning("[{Job}] Instagram API error: {Err}", job, info.Error);
+            return DownloadResult.Fail($"Cobalt API failed: {info.Error}");
         }
 
         if (info.Items.Count == 0)
@@ -114,10 +115,8 @@ public sealed class MediaDownloadService
             _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
             return new DownloadResult { Success = true, MediaUrls = mediaUrls };
         }
-
-        // Has images + audio → download from URLs we already have, merge with ffmpeg
-        _log.LogInformation("[{Job}] Images + audio → downloading for merge", job);
-        return await ViaInstagramApiDisk(info, job, ct);
+        
+        // ... rest of your disk merging logic (if any) ...
     }
 
     private async Task<DownloadResult> ViaInstagramApiDisk(IgMediaResult info, string job, CancellationToken ct)
