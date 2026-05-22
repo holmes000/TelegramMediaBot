@@ -11,7 +11,6 @@ jobs:
     timeout-minutes: 15
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      INSTAGRAM_COOKIES_B64: ${{ secrets.INSTAGRAM_COOKIES_B64 }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -20,12 +19,10 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: BOT_TOKEN,INSTAGRAM_COOKIES_B64
+          envs: BOT_TOKEN
           script: |
             set -e
             REPO_DIR="$HOME/TelegramMediaBot"
-
-            echo "DEBUG: INSTAGRAM_COOKIES_B64 length = ${#INSTAGRAM_COOKIES_B64}"
 
             # ── First-time setup (idempotent) ─────────────────────
 
@@ -53,30 +50,9 @@ jobs:
             git fetch origin master
             git reset --hard origin/master
 
-            # ── Write cookies from base64 and extract sessionid ───
-
-            SESSION_ID=""
-            if [ -n "$INSTAGRAM_COOKIES_B64" ]; then
-              printf '%s' "$INSTAGRAM_COOKIES_B64" | base64 -d | sudo tee cookies/instagram_cookies.txt > /dev/null
-              sudo chmod 644 cookies/instagram_cookies.txt
-
-              LINES=$(wc -l < cookies/instagram_cookies.txt)
-              echo "✅ Cookies written ($LINES lines)"
-
-              SESSION_ID=$(awk -F'\t' '$6 == "sessionid" {print $7}' cookies/instagram_cookies.txt | tr -d '\r' | head -1)
-
-              if [ -n "$SESSION_ID" ]; then
-                echo "✅ Sessionid extracted (${#SESSION_ID} chars)"
-              else
-                echo "⚠️  Sessionid not found in cookies file"
-              fi
-            else
-              echo "⚠️  INSTAGRAM_COOKIES_B64 is empty — no cookies written"
-            fi
-
             # ── Write .env ────────────────────────────────────────
 
-            printf 'BOT_TOKEN=%s\nINSTAGRAM_SESSION_ID=%s\n' "$BOT_TOKEN" "$SESSION_ID" | sudo tee .env > /dev/null
+            printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN" | sudo tee .env > /dev/null
             sudo chmod 644 .env
 
             # ── Build and deploy ──────────────────────────────────
