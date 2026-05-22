@@ -6,11 +6,10 @@ namespace TelegramMediaBot.Services;
 /// <summary>
 /// Orchestrator — routes URLs to the optimal tool chain:
 ///
-/// Instagram (private API — fastest):
-///   • Single API call gets all media URLs + audio + caption
-///   • Videos/images without audio → send CDN URLs directly (no disk)
-///   • Images with audio → download + ffmpeg merge (disk)
-///   • Falls back to gallery-dl if private API unavailable
+/// Instagram (Cobalt API):
+///   • ALL Instagram URLs routed here.
+///   • Single API call gets direct CDN URLs.
+///   • Sends CDN URLs directly to Telegram (no disk, no ffmpeg).
 ///
 /// TikTok:
 ///   • Videos → yt-dlp stream (no disk)
@@ -45,7 +44,7 @@ public sealed class MediaDownloadService
             cts.CancelAfter(TimeSpan.FromMinutes(2));
             var timeout = cts.Token;
 
-            // ── NEW: ALL Instagram URLs go to the Cobalt API ────
+            // ── ALL Instagram URLs go to the Cobalt API ────
             if (UrlHelper.IsInstagramUrl(url))
             {
                 _log.LogInformation("[{Job}] Instagram URL → Cobalt API", job);
@@ -90,7 +89,7 @@ public sealed class MediaDownloadService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Instagram private API path
+    // Instagram Cobalt API path (Lightning Fast, No Disk)
     // ═══════════════════════════════════════════════════════════════════
 
     private async Task<DownloadResult> ViaInstagramApi(string url, string job, CancellationToken ct)
@@ -99,110 +98,23 @@ public sealed class MediaDownloadService
 
         if (info.HasError)
         {
-            // ── WE STOP HERE NOW ──
-            // Do NOT fallback to gallery-dl, because gallery-dl cannot scrape Instagram without cookies.
-            _log.LogWarning("[{Job}] Instagram API error: {Err}", job, info.Error);
-            return DownloadResult.Fail($"Cobalt API failed: {info.Error}");
+            // Do NOT fall back to gallery-dl. Gallery-dl cannot scrape IG without cookies.
+            _log.LogWarning("[{Job}] Cobalt API error: {Err}", job, info.Error);
+            return DownloadResult.Fail($"Failed to fetch from Instagram: {info.Error}");
         }
 
         if (info.Items.Count == 0)
             return DownloadResult.Fail("No media found in this post.");
 
-        // No audio → send CDN URLs directly (no disk!)
-        if (!info.HasAudio || !info.HasImages)
-        {
-            var mediaUrls = info.Items.Select(i => (i.Url, i.Type)).ToList();
-            _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
-            return new DownloadResult { Success = true, MediaUrls = mediaUrls };
-        }
+        // Cobalt returns raw CDN URLs pre-merged. Send directly to Telegram.
+        var mediaUrls = info.Items.Select(i => (i.Url, i.Type)).ToList();
+        _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
         
-        // ... rest of your disk merging logic (if any) ...
-    }
-
-    private async Task<DownloadResult> ViaInstagramApiDisk(IgMediaResult info, string job, CancellationToken ct)
-    {
-        var dir = MakeWorkDir(job);
-
-        // Download files from URLs we already have (no second API call)
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-        var imgs = new List<string>();
-        var vids = new List<string>();
-
-        for (var i = 0; i < info.Items.Count; i++)
-        {
-            var item = info.Items[i];
-            var ext = item.Type == "video" ? "mp4" : "jpg";
-            var path = Path.Combine(dir, $"{i:D3}.{ext}");
-            try
-            {
-                var bytes = await http.GetByteArrayAsync(item.Url, ct);
-                await File.WriteAllBytesAsync(path, bytes, ct);
-                if (item.Type == "video") vids.Add(path); else imgs.Add(path);
-            }
-            catch (Exception ex) { _log.LogWarning("[{Job}] Download failed for item {I}: {Err}", job, i, ex.Message); }
-        }
-
-        // Download audio
-        string? audioPath = null;
-        int clipStart = 0, clipDur = 0;
-        if (info.Audio?.Url is not null)
-        {
-            audioPath = Path.Combine(dir, "audio.m4a");
-            try
-            {
-                var bytes = await http.GetByteArrayAsync(info.Audio.Url, ct);
-                await File.WriteAllBytesAsync(audioPath, bytes, ct);
-                clipStart = info.Audio.StartMs;
-                clipDur = info.Audio.DurationMs;
-            }
-            catch { audioPath = null; }
-        }
-
-        _log.LogInformation("[{Job}] Downloaded {V}vid {I}img audio={A}", job, vids.Count, imgs.Count, audioPath is not null);
-
-        if (imgs.Count == 0 && vids.Count == 0)
-            return DownloadResult.Fail("No media files downloaded.");
-
-        // Merge images + audio into slideshow video
-        string? slideshow = null;
-        if (imgs.Count > 0 && audioPath is not null)
-        {
-            _log.LogInformation("[{Job}] Merging {N} images + audio (clip {S}ms+{D}ms)",
-                job, imgs.Count, clipStart, clipDur);
-            slideshow = await _ffmpeg.MergeImagesToVideoAsync(imgs, audioPath, dir, clipStart, clipDur, ct);
-        }
-
-        if (slideshow is not null)
-        {
-            if (vids.Count == 0)
-                return Ok(videoPath: slideshow);
-
-            // Mixed: slideshow replaces images, keep videos
-            var album = new List<string>();
-            var inserted = false;
-            foreach (var item in info.Items)
-            {
-                if (item.Type == "image") { if (!inserted) { album.Add(slideshow); inserted = true; } }
-                else
-                {
-                    var vPath = vids.FirstOrDefault(v => v.EndsWith($"{info.Items.IndexOf(item):D3}.mp4"));
-                    if (vPath is not null) album.Add(vPath);
-                }
-            }
-            return album.Count == 1 ? Ok(videoPath: album[0]) : Ok(albumPaths: album);
-        }
-
-        // No audio merge
-        if (vids.Count > 0 && imgs.Count > 0) return Ok(albumPaths: [.. imgs, .. vids]);
-        if (vids.Count == 1) return Ok(videoPath: vids[0]);
-        if (vids.Count > 1) return Ok(albumPaths: vids);
-        if (imgs.Count > 0) return Ok(imagePaths: imgs);
-
-        return DownloadResult.Fail("No media files downloaded.");
+        return new DownloadResult { Success = true, MediaUrls = mediaUrls };
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // yt-dlp path (TikTok videos, fallback)
+    // yt-dlp path (TikTok videos)
     // ═══════════════════════════════════════════════════════════════════
 
     private async Task<DownloadResult> ViaYtDlp(string url, string job, CancellationToken ct)
@@ -212,15 +124,14 @@ public sealed class MediaDownloadService
 
         if (meta is null)
         {
-            // Login required = cookies are invalid/missing — don't retry, fail fast
             var loginRequired =
                 err?.Contains("login required", StringComparison.OrdinalIgnoreCase) == true ||
                 err?.Contains("rate-limit reached", StringComparison.OrdinalIgnoreCase) == true;
 
             if (loginRequired)
             {
-                _log.LogWarning("[{Job}] Login required — cookies may be invalid", job);
-                return DownloadResult.Fail("Instagram requires login. Cookies may be expired or missing.");
+                _log.LogWarning("[{Job}] Login required or rate limited", job);
+                return DownloadResult.Fail("Service requires login or is rate limited.");
             }
 
             var cantHandle =
@@ -286,7 +197,7 @@ public sealed class MediaDownloadService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // gallery-dl path (fallback for Instagram without auth, TikTok photos)
+    // gallery-dl path (TikTok photos)
     // ═══════════════════════════════════════════════════════════════════
 
     private async Task<DownloadResult> ViaGalleryDl(string url, string job, string? caption, CancellationToken ct)
@@ -306,18 +217,6 @@ public sealed class MediaDownloadService
         {
             _log.LogInformation("[{Job}] Audio present → disk for merge", job);
             return await ViaGalleryDlDisk(url, job, caption, ct);
-        }
-
-        // Instagram images without audio from gallery-dl — check if post has music via private API
-        if (hasImages && !hasAudio && UrlHelper.IsInstagramUrl(url) && _ig.IsAvailable)
-        {
-            _log.LogInformation("[{Job}] IG images — checking for audio via private API", job);
-            var igInfo = await _ig.GetMediaInfoAsync(url, ct);
-            if (igInfo is { HasAudio: true, HasImages: true })
-            {
-                _log.LogInformation("[{Job}] Post has music → merging via private API", job);
-                return await ViaInstagramApiDisk(igInfo, job, ct);
-            }
         }
 
         var urls = items.Where(i => i.Category is "image" or "video").Select(i => (i.Url, i.Category)).ToList();
@@ -380,5 +279,4 @@ public sealed class MediaDownloadService
     private static DownloadResult Ok(string? videoPath = null, List<string>? imagePaths = null,
         List<string>? albumPaths = null, string? caption = null) =>
         new() { Success = true, VideoPath = videoPath, ImagePaths = imagePaths, AlbumPaths = albumPaths };
-
 }
