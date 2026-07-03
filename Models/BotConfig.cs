@@ -39,8 +39,8 @@ public sealed class BotConfig
     /// <summary>Manual override for the Instagram GraphQL doc_id (normally auto-discovered).</summary>
     public string? IgDocId { get; set; }
 
-    /// <summary>InstaFix-style embed-fixer hosts, tried in order.</summary>
-    public string[] EmbedFixerHosts { get; set; } = ["ddinstagram.com", "kkinstagram.com", "instagramez.com"];
+    /// <summary>InstaFix-style embed-fixer hosts, tried in order. (ddinstagram.com is gone — its DNS no longer resolves.)</summary>
+    public string[] EmbedFixerHosts { get; set; } = ["kkinstagram.com", "toinstagram.com", "instagram7.com", "instagramez.com"];
 
     public long? AdminChat =>
         long.TryParse(AdminChatId, out var id) ? id : null;

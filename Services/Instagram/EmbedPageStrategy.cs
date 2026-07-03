@@ -57,7 +57,13 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
                     items.Add(new IgMediaItem { Type = "image", Url = WebUtility.HtmlDecode(imgMatch.Groups[1].Value) });
             }
 
-            return items.Count > 0 ? new IgMediaResult { Items = items } : null;
+            if (items.Count == 0)
+            {
+                _log.LogWarning("Instagram embed page returned HTTP 200 but no media markup (likely a login/challenge wall)");
+                return null;
+            }
+
+            return new IgMediaResult { Items = items };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
