@@ -24,6 +24,17 @@ public sealed class MediaDownloadService
     private readonly BotConfig _cfg;
     private readonly ILogger<MediaDownloadService> _log;
 
+    // Used only by the URL→disk fallback; per-call timeout comes from the CancellationToken.
+    private static readonly HttpClient _http = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
+    {
+        var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        return http;
+    }
+
     public MediaDownloadService(
         YtDlpService ytDlp, GalleryDlService galleryDl, FfmpegService ffmpeg,
         InstagramService ig, BotConfig cfg, ILogger<MediaDownloadService> log)
@@ -111,6 +122,57 @@ public sealed class MediaDownloadService
         _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
         
         return new DownloadResult { Success = true, MediaUrls = mediaUrls };
+    }
+
+    /// <summary>
+    /// Fallback when Telegram refuses to fetch a CDN URL itself (its URL-based
+    /// sends are capped at ~20 MB for video / 5 MB for photos): download the
+    /// items to disk here and return a file-based result so the caller can
+    /// re-send them as uploads. Throws on failure — the caller decides how to
+    /// surface the original send error.
+    /// </summary>
+    public async Task<DownloadResult> DownloadMediaUrlsToDiskAsync(DownloadResult src, CancellationToken ct)
+    {
+        var items = src.MediaUrls ?? throw new InvalidOperationException("Result has no MediaUrls.");
+        var job = Guid.NewGuid().ToString("N")[..8];
+        var dir = MakeWorkDir(job);
+        _log.LogInformation("[{Job}] Downloading {N} CDN URLs to disk for re-upload", job, items.Count);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+
+        var paths = new List<string>();
+        var n = 0;
+        foreach (var (url, category) in items)
+        {
+            n++;
+            var ext = GuessExtension(url, category);
+            var path = Path.Combine(dir, $"{n:D3}{ext}");
+
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            response.EnsureSuccessStatusCode();
+            await using var fs = File.Create(path);
+            await response.Content.CopyToAsync(fs, cts.Token);
+            paths.Add(path);
+        }
+
+        var vids = paths.Where(FileTypeHelper.IsVideo).ToList();
+
+        if (paths.Count == 1 && vids.Count == 1)
+            return new DownloadResult { Success = true, VideoPath = paths[0], Caption = src.Caption };
+        if (vids.Count == 0)
+            return new DownloadResult { Success = true, ImagePaths = paths, Caption = src.Caption };
+        return new DownloadResult { Success = true, AlbumPaths = paths, Caption = src.Caption };
+    }
+
+    /// <summary>Extension from the URL path when recognizable, else by category.</summary>
+    private static string GuessExtension(string url, string category)
+    {
+        var path = url.Split('?')[0];
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        var matchesCategory = category == "video" ? FileTypeHelper.IsVideo(path) : FileTypeHelper.IsImage(path);
+        if (ext.Length > 0 && matchesCategory) return ext;
+        return category == "video" ? ".mp4" : ".jpg";
     }
 
     // ═══════════════════════════════════════════════════════════════════
