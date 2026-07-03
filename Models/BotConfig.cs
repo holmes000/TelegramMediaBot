@@ -33,6 +33,26 @@ public sealed class BotConfig
     public int MaxFileSizeMb { get; set; } = 50;
     public int SlideshowImageDurationSec { get; set; } = 3;
 
+    // ── Instagram extraction chain ────────────────────────────────────
+
+    /// <summary>Self-hosted Cobalt instance (e.g. http://cobalt:9000). Tried before public instances.</summary>
+    public string? CobaltLocalUrl { get; set; }
+
+    /// <summary>Chat id that receives canary alerts when extraction tiers break. String so an empty env var binds cleanly.</summary>
+    public string? AdminChatId { get; set; }
+
+    /// <summary>Known-public post used by the canary to test each extraction tier.</summary>
+    public string CanaryUrl { get; set; } = "https://www.instagram.com/p/BsOGulcndj-/";
+
+    /// <summary>Manual override for the Instagram GraphQL doc_id (normally auto-discovered).</summary>
+    public string? IgDocId { get; set; }
+
+    /// <summary>InstaFix-style embed-fixer hosts, tried in order.</summary>
+    public string[] EmbedFixerHosts { get; set; } = ["ddinstagram.com", "kkinstagram.com", "instagramez.com"];
+
+    public long? AdminChat =>
+        long.TryParse(AdminChatId, out var id) ? id : null;
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     /// <summary>Returns true if any Instagram login method is configured.</summary>

@@ -2,7 +2,16 @@
 
 A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, slideshows, carousels, stories, and image-with-music posts.
 
-**Instagram** uses Instagram's anonymous web GraphQL endpoint (no account or cookies needed), with the public embed page and community [Cobalt](https://github.com/imputnet/cobalt) instances as fallbacks.
+**Instagram** runs a self-healing chain of extraction tiers — no account or cookies needed:
+
+1. **Anonymous GraphQL** — Instagram's own logged-out web API. The `doc_id` it needs (which Instagram rotates every few weeks) is auto-discovered from Instagram's JS bundles and cached in `data/ig_docid.txt`.
+2. **Public embed page** (`/embed/captioned/`) — a separate Instagram surface with its own rate limits.
+3. **Embed-fixer services** (ddinstagram-style) — community-run resolvers, hosts configurable.
+4. **Self-hosted [Cobalt](https://github.com/imputnet/cobalt)** — runs as a Docker sidecar on your own IP, auto-updated daily by Watchtower.
+5. **Public Cobalt instances** — last resort.
+
+Tiers that fail repeatedly are put on a short cooldown so they don't add latency; a **canary** re-tests every tier against a known post every 6 hours and (if `ADMIN_CHAT_ID` is set) alerts you on Telegram when tiers break.
+
 **TikTok** uses yt-dlp for videos and gallery-dl for photo slideshows.
 **ffmpeg** merges images + audio into slideshow videos when needed.
 
@@ -86,9 +95,12 @@ Non-sensitive settings live in `appsettings.json`. **All secrets come from envir
 | Variable | Description |
 |---|---|
 | `Bot__Token` | Telegram bot token (**required**) |
-| `Bot__InstagramSessionId` | Instagram sessionid cookie (for all IG content) |
-| `Bot__InstagramUsername` | Alternative: IG username |
-| `Bot__InstagramPassword` | Alternative: IG password |
+| `Bot__AdminChatId` | Chat id for canary alerts when IG extraction tiers break (optional) |
+| `Bot__CobaltLocalUrl` | Self-hosted Cobalt URL (set automatically by docker-compose) |
+| `Bot__IgDocId` | Manual override for the IG GraphQL doc_id (normally auto-discovered) |
+| `Bot__InstagramSessionId` | Instagram sessionid cookie (optional, legacy) |
+| `Bot__InstagramUsername` | Alternative: IG username (optional, legacy) |
+| `Bot__InstagramPassword` | Alternative: IG password (optional, legacy) |
 
 **appsettings.json (non-sensitive defaults):**
 
@@ -120,7 +132,7 @@ The workflow handles **everything automatically** — first-time server setup, c
 
 In the AWS Console:
 - **AMI:** Ubuntu 24.04 LTS
-- **Type:** t3.micro (free tier) or t3.small (more headroom for ffmpeg)
+- **Type:** t3.micro (free tier) fits bot + Cobalt sidecar + Watchtower but is snug — add 1 GB of swap, or use t3.small for headroom
 - **Storage:** 20 GB gp3
 - **Security group:** outbound all, inbound SSH only (port 22)
 - Create a key pair and download the `.pem` file
@@ -135,6 +147,7 @@ Go to your repo → **Settings** → **Secrets and variables** → **Actions** �
 | `EC2_USER` | `ubuntu` |
 | `EC2_SSH_KEY` | Full contents of your `.pem` key file |
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
+| `ADMIN_CHAT_ID` | Your Telegram chat id for canary alerts (optional — get it from @userinfobot) |
 | `INSTAGRAM_COOKIES_B64` | Base64-encoded cookies.txt (see below) |
 
 **To create `INSTAGRAM_COOKIES_B64`:**

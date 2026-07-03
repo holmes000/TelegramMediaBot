@@ -31,6 +31,8 @@ Console.WriteLine($"    SessionId: {(!string.IsNullOrWhiteSpace(cfg.InstagramSes
 Console.WriteLine($"    Username:  {(!string.IsNullOrWhiteSpace(cfg.InstagramUsername) ? cfg.InstagramUsername : "empty")}");
 Console.WriteLine($"    Session file: {cfg.IgSessionFile} ({(File.Exists(cfg.IgSessionFile) ? "exists" : "not found")})");
 Console.WriteLine($"  Cookies: {(cfg.HasCookiesFile ? cfg.CookiesFile : "not found")}");
+Console.WriteLine($"  Local Cobalt: {(!string.IsNullOrWhiteSpace(cfg.CobaltLocalUrl) ? cfg.CobaltLocalUrl : "not configured")}");
+Console.WriteLine($"  Canary alerts: {(cfg.AdminChat is not null ? $"→ chat {cfg.AdminChat}" : "log only (set Bot__AdminChatId to get Telegram alerts)")}");
 Console.WriteLine();
 
 // Register services
@@ -44,6 +46,7 @@ builder.Services.AddSingleton<BotUpdateHandler>();
 builder.Services.AddSingleton<ITelegramBotClient>(new TelegramBotClient(cfg.Token));
 builder.Services.AddHostedService<BotHostedService>();
 builder.Services.AddHostedService<TempCleanupService>();
+builder.Services.AddHostedService<IgCanaryService>();
 
 var app = builder.Build();
 

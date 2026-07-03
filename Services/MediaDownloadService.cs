@@ -117,11 +117,20 @@ public sealed class MediaDownloadService
         if (info.Items.Count == 0)
             return DownloadResult.Fail("No media found in this post.");
 
-        // Cobalt returns raw CDN URLs pre-merged. Send directly to Telegram.
         var mediaUrls = info.Items.Select(i => (i.Url, i.Type)).ToList();
+
+        // Tunnel URLs from the local Cobalt sidecar are only reachable inside
+        // the compose network — Telegram can't fetch them. Download here instead.
+        if (HasLocalUrl(mediaUrls))
+        {
+            _log.LogInformation("[{Job}] Local Cobalt tunnel URLs → downloading to disk", job);
+            var urlResult = new DownloadResult { Success = true, MediaUrls = mediaUrls, Caption = info.Caption };
+            return await DownloadMediaUrlsToDiskAsync(urlResult, ct);
+        }
+
+        // Direct CDN URLs. Send straight to Telegram (no disk).
         _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
-        
-        return new DownloadResult { Success = true, MediaUrls = mediaUrls };
+        return new DownloadResult { Success = true, MediaUrls = mediaUrls, Caption = info.Caption };
     }
 
     /// <summary>
@@ -163,6 +172,18 @@ public sealed class MediaDownloadService
         if (vids.Count == 0)
             return new DownloadResult { Success = true, ImagePaths = paths, Caption = src.Caption };
         return new DownloadResult { Success = true, AlbumPaths = paths, Caption = src.Caption };
+    }
+
+    /// <summary>True if any media URL points at the self-hosted Cobalt instance.</summary>
+    private bool HasLocalUrl(List<(string Url, string Category)> mediaUrls)
+    {
+        if (string.IsNullOrWhiteSpace(_cfg.CobaltLocalUrl) ||
+            !Uri.TryCreate(_cfg.CobaltLocalUrl, UriKind.Absolute, out var local))
+            return false;
+
+        return mediaUrls.Any(m =>
+            Uri.TryCreate(m.Url, UriKind.Absolute, out var u) &&
+            string.Equals(u.Host, local.Host, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Extension from the URL path when recognizable, else by category.</summary>
