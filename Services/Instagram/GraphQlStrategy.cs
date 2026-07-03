@@ -61,8 +61,9 @@ public sealed class GraphQlStrategy : IIgStrategy
             using var response = await _http.SendAsync(httpRequest, ct);
             if (!response.IsSuccessStatusCode)
             {
+                // IP block / rate limit — a fresh doc_id can't fix this, so don't
+                // report it to the DocIdProvider.
                 _log.LogWarning("Instagram GraphQL returned HTTP {Code}", (int)response.StatusCode);
-                await _docIds.ReportFailureAsync(shortcode, ct);
                 return null;
             }
 
@@ -74,7 +75,7 @@ public sealed class GraphQlStrategy : IIgStrategy
                 media.ValueKind != JsonValueKind.Object)
             {
                 _log.LogWarning("Instagram GraphQL: no media in response (private/removed post, stale doc_id, or rate limited)");
-                await _docIds.ReportFailureAsync(shortcode, ct);
+                _docIds.ReportFailure(shortcode);
                 return null;
             }
 
