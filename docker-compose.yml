@@ -6,7 +6,6 @@ services:
       - cobalt
     environment:
       - Bot__Token=${BOT_TOKEN}
-      - Bot__InstagramSessionId=${INSTAGRAM_SESSION_ID}
       - Bot__CobaltLocalUrl=http://cobalt:9000
       - Bot__AdminChatId=${ADMIN_CHAT_ID:-}
     volumes:

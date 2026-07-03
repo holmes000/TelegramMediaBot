@@ -54,15 +54,6 @@ public static partial class UrlHelper
         url.Contains("ddinstagram.com", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Content that only the private API (instagrapi) can handle.
-    /// yt-dlp and gallery-dl don't support stories or highlights.
-    /// </summary>
-    public static bool NeedsPrivateApi(string url) =>
-        IsInstagramUrl(url) &&
-        (url.Contains("/stories/", StringComparison.OrdinalIgnoreCase) ||
-         url.Contains("/s/", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
     /// URLs known to be photo/slideshow that yt-dlp can't handle.
     /// Detected before calling yt-dlp to avoid the slow "Unsupported URL" error.
     /// </summary>

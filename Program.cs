@@ -19,17 +19,13 @@ if (string.IsNullOrWhiteSpace(cfg.Token))
     return;
 }
 
-// Ensure directories exist
+// Ensure directories exist ("data" also holds the DocIdProvider cache)
 Directory.CreateDirectory(cfg.TempDir);
-Directory.CreateDirectory(Path.GetDirectoryName(cfg.IgSessionFile) ?? "data");
+Directory.CreateDirectory("data");
 Directory.CreateDirectory("cookies");
 if (OperatingSystem.IsWindows()) Directory.CreateDirectory("tools_bin");
 
 // Startup diagnostics
-Console.WriteLine($"  Instagram auth: {(cfg.HasInstagramAuth ? "YES" : "NO")}");
-Console.WriteLine($"    SessionId: {(!string.IsNullOrWhiteSpace(cfg.InstagramSessionId) ? "set" : "empty")}");
-Console.WriteLine($"    Username:  {(!string.IsNullOrWhiteSpace(cfg.InstagramUsername) ? cfg.InstagramUsername : "empty")}");
-Console.WriteLine($"    Session file: {cfg.IgSessionFile} ({(File.Exists(cfg.IgSessionFile) ? "exists" : "not found")})");
 Console.WriteLine($"  Cookies: {(cfg.HasCookiesFile ? cfg.CookiesFile : "not found")}");
 Console.WriteLine($"  Local Cobalt: {(!string.IsNullOrWhiteSpace(cfg.CobaltLocalUrl) ? cfg.CobaltLocalUrl : "not configured")}");
 Console.WriteLine($"  Canary alerts: {(cfg.AdminChat is not null ? $"→ chat {cfg.AdminChat}" : "log only (set Bot__AdminChatId to get Telegram alerts)")}");

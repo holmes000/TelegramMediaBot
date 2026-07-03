@@ -15,18 +15,10 @@ public sealed class BotConfig
     public string YtDlpPath { get; set; } = DefaultToolPath("yt-dlp");
     public string FfmpegPath { get; set; } = DefaultToolPath("ffmpeg");
     public string GalleryDlPath { get; set; } = DefaultToolPath("gallery-dl");
-    public string PythonPath { get; set; } = OperatingSystem.IsWindows() ? "python" : "python3";
-    public string IgScript { get; set; } = Path.Combine("scripts", "ig_media.py");
 
-    // ── Cookies / auth ────────────────────────────────────────────────
+    // ── Cookies (optional, fed to yt-dlp / gallery-dl for TikTok) ─────
     public string CookiesFile { get; set; } = Path.Combine("cookies", "instagram_cookies.txt");
     public string? CookiesFromBrowser { get; set; }
-
-    // ── Instagram private API (for image-with-music audio) ────────────
-    public string? InstagramSessionId { get; set; }
-    public string? InstagramUsername { get; set; }
-    public string? InstagramPassword { get; set; }
-    public string IgSessionFile { get; set; } = Path.Combine("data", "ig_session.json");
 
     // ── Processing ────────────────────────────────────────────────────
     public string TempDir { get; set; } = Path.Combine("data", "temp");
@@ -55,12 +47,6 @@ public sealed class BotConfig
 
     // ── Helpers ───────────────────────────────────────────────────────
 
-    /// <summary>Returns true if any Instagram login method is configured.</summary>
-    public bool HasInstagramAuth =>
-        !string.IsNullOrWhiteSpace(InstagramSessionId) ||
-        (!string.IsNullOrWhiteSpace(InstagramUsername) && !string.IsNullOrWhiteSpace(InstagramPassword)) ||
-        File.Exists(IgSessionFile);
-
     /// <summary>Returns true if a valid Netscape cookies file exists.</summary>
     public bool HasCookiesFile
     {
@@ -77,18 +63,6 @@ public sealed class BotConfig
             }
             catch { return false; }
         }
-    }
-
-    /// <summary>
-    /// Builds the yt-dlp / gallery-dl cookie argument string.
-    /// </summary>
-    public string BuildCookieArgs()
-    {
-        if (HasCookiesFile)
-            return $"--cookies \"{CookiesFile}\"";
-        if (!string.IsNullOrWhiteSpace(CookiesFromBrowser))
-            return $"--cookies-from-browser {CookiesFromBrowser}";
-        return "";
     }
 
     /// <summary>

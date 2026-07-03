@@ -1,6 +1,6 @@
 # TelegramMediaBot
 
-A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, slideshows, carousels, stories, and image-with-music posts.
+A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, reels, carousels, and slideshows.
 
 **Instagram** runs a self-healing chain of extraction tiers — no account or cookies needed:
 
@@ -19,11 +19,10 @@ Tiers that fail repeatedly are put on a short cooldown so they don't add latency
 
 | Content type | How it works | Disk I/O |
 |---|---|---|
-| Instagram video / reel | instagrapi CDN URL → Telegram `FromUri` | **None** |
-| Instagram image (no music) | instagrapi CDN URL → Telegram `FromUri` | **None** |
-| Instagram carousel (no music) | instagrapi CDN URLs → album `FromUri` | **None** |
-| Instagram image + music | instagrapi image + audio → ffmpeg merge | Temp files |
-| Instagram carousel + music | instagrapi all + audio → ffmpeg slideshow + album | Temp files |
+| Instagram video / reel | extraction chain → CDN URL → Telegram `FromUri` | **None** |
+| Instagram image | extraction chain → CDN URL → Telegram `FromUri` | **None** |
+| Instagram carousel | extraction chain → CDN URLs → album `FromUri` | **None** |
+| Instagram (URL send fails / local Cobalt) | downloaded to temp → re-uploaded | Temp files |
 | TikTok video | yt-dlp pipes stdout → Telegram | **None** (streamed) |
 | TikTok slideshow | gallery-dl images + audio → ffmpeg merge | Temp files |
 
@@ -35,18 +34,18 @@ Tiers that fail repeatedly are put on a short cooldown so they don't add latency
 TelegramMediaBot/
 ├── Models/                 BotConfig, DownloadResult, YtDlpMeta
 ├── Services/               BotUpdateHandler, MediaDownloadService, InstagramService,
-│                           YtDlpService, GalleryDlService, FfmpegService
+│   │                       IgCanaryService, YtDlpService, GalleryDlService, FfmpegService
+│   └── Instagram/          Extraction tiers: GraphQlStrategy, EmbedPageStrategy,
+│                           EmbedFixerStrategy, CobaltStrategy, DocIdProvider, TierHealthTracker
 ├── Helpers/                UrlHelper, FileTypeHelper, ProcessRunner
-├── scripts/
-│   └── ig_media.py         Instagram private API — extracts all media + audio in one call
-├── cookies/                instagram_cookies.txt (gitignored)
+├── cookies/                optional cookies for yt-dlp/gallery-dl (gitignored)
 ├── tools_bin/              Windows only: yt-dlp.exe, ffmpeg.exe, gallery-dl.exe
-├── data/                   temp/ (auto-cleaned every 30 min), ig_session.json (gitignored)
+├── data/                   temp/ (auto-cleaned every 30 min), ig_docid.txt cache
 ├── .github/workflows/
 │   └── deploy.yml          GitHub Actions → EC2 (auto-setup + deploy)
 ├── Program.cs
 ├── appsettings.json        Non-sensitive config only
-├── docker-compose.yml
+├── docker-compose.yml      bot + Cobalt sidecar + Watchtower
 ├── Dockerfile
 └── .env.example            Template for secrets (gitignored when filled)
 ```
@@ -56,7 +55,6 @@ TelegramMediaBot/
 ### Prerequisites
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- [Python 3](https://www.python.org/) + `pip install instagrapi requests`
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
 - [ffmpeg](https://ffmpeg.org/download.html)
 - [gallery-dl](https://github.com/mikf/gallery-dl) — `pip install gallery-dl`
@@ -64,24 +62,20 @@ TelegramMediaBot/
 ### Windows
 
 1. Download `yt-dlp.exe`, `ffmpeg.exe`, `gallery-dl.exe` into `tools_bin/`
-2. `pip install instagrapi requests gallery-dl`
-3. Get a bot token from [@BotFather](https://t.me/BotFather)
-4. Set environment variables:
+2. Get a bot token from [@BotFather](https://t.me/BotFather)
+3. Set environment variables:
    ```
    set Bot__Token=your-bot-token
-   set Bot__InstagramSessionId=your-sessionid
    ```
-5. Export Instagram cookies → save as `cookies/instagram_cookies.txt`
-6. `dotnet run`
+4. `dotnet run`
 
 ### Linux
 
 ```bash
 sudo apt install ffmpeg python3 python3-pip
-pip install yt-dlp gallery-dl instagrapi requests
+pip install yt-dlp gallery-dl
 
 export Bot__Token="your-bot-token"
-export Bot__InstagramSessionId="your-sessionid"
 
 dotnet run
 ```
@@ -98,9 +92,6 @@ Non-sensitive settings live in `appsettings.json`. **All secrets come from envir
 | `Bot__AdminChatId` | Chat id for canary alerts when IG extraction tiers break (optional) |
 | `Bot__CobaltLocalUrl` | Self-hosted Cobalt URL (set automatically by docker-compose) |
 | `Bot__IgDocId` | Manual override for the IG GraphQL doc_id (normally auto-discovered) |
-| `Bot__InstagramSessionId` | Instagram sessionid cookie (optional, legacy) |
-| `Bot__InstagramUsername` | Alternative: IG username (optional, legacy) |
-| `Bot__InstagramPassword` | Alternative: IG password (optional, legacy) |
 
 **appsettings.json (non-sensitive defaults):**
 
@@ -109,8 +100,7 @@ Non-sensitive settings live in `appsettings.json`. **All secrets come from envir
 | `YtDlpPath` | `tools_bin/yt-dlp.exe` | `yt-dlp` |
 | `FfmpegPath` | `tools_bin/ffmpeg.exe` | `ffmpeg` |
 | `GalleryDlPath` | `tools_bin/gallery-dl.exe` | `gallery-dl` |
-| `PythonPath` | `python` | `python3` |
-| `CookiesFile` | `cookies/instagram_cookies.txt` | same |
+| `CookiesFile` | `cookies/instagram_cookies.txt` (optional, yt-dlp/gallery-dl only) | same |
 | `TempDir` | `data/temp` | same |
 | `MaxFileSizeMb` | `50` | same |
 | `SlideshowImageDurationSec` | `3` | same |
@@ -148,19 +138,6 @@ Go to your repo → **Settings** → **Secrets and variables** → **Actions** �
 | `EC2_SSH_KEY` | Full contents of your `.pem` key file |
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `ADMIN_CHAT_ID` | Your Telegram chat id for canary alerts (optional — get it from @userinfobot) |
-| `INSTAGRAM_COOKIES_B64` | Base64-encoded cookies.txt (see below) |
-
-**To create `INSTAGRAM_COOKIES_B64`:**
-
-```bash
-# Linux/Mac:
-base64 -w 0 cookies/instagram_cookies.txt
-
-# Windows (PowerShell):
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies\instagram_cookies.txt"))
-```
-
-Copy the output and paste it as the secret value. Base64 preserves all tabs, spaces, and newlines perfectly. The `sessionid` is automatically extracted from the cookies file during deploy — no separate secret needed.
 
 Secrets are passed as environment variables to the SSH session — they never appear in workflow logs or script text.
 
@@ -174,8 +151,8 @@ git push origin master
 1. SSH into the EC2 instance
 2. Install Docker, docker-compose, and git
 3. Clone the repo
-4. Write `.env` and `cookies/instagram_cookies.txt` from secrets
-5. Build the Docker image and start the container
+4. Write `.env` from secrets
+5. Build the Docker image and start the containers (bot + Cobalt + Watchtower)
 
 **Subsequent pushes** skip install/clone and just pull + rebuild (~2 minutes).
 
@@ -207,24 +184,6 @@ docker compose restart
 docker compose up --build -d --force-recreate
 docker image prune -f
 ```
-
-## Updating Instagram Cookies
-
-Instagram cookies expire after a few months. To refresh:
-
-1. Log into Instagram in your browser
-2. Export cookies using "Get cookies.txt LOCALLY" browser extension
-3. Re-encode as base64:
-   ```bash
-   # Linux/Mac:
-   base64 -w 0 cookies.txt
-   # Windows PowerShell:
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))
-   ```
-4. Update the `INSTAGRAM_COOKIES_B64` secret in GitHub (repo → Settings → Secrets)
-5. Push any commit or re-run the deploy workflow
-
-The `sessionid` is automatically extracted from the cookies file — no separate secret needed.
 
 ## Security
 

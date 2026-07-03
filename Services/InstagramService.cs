@@ -8,28 +8,15 @@ public sealed class IgMediaResult
 {
     public string? Caption { get; init; }
     public List<IgMediaItem> Items { get; init; } = [];
-    public IgAudioInfo? Audio { get; init; }
     public string? Error { get; init; }
 
     public bool HasError => Error is not null;
-    public bool HasAudio => Audio?.Url is not null;
-    public bool HasImages => Items.Any(i => i.Type == "image");
-    public bool HasVideos => Items.Any(i => i.Type == "video");
 }
 
 public sealed class IgMediaItem
 {
     public string Type { get; init; } = "";
     public string Url { get; init; } = "";
-    public string? Path { get; init; }
-}
-
-public sealed class IgAudioInfo
-{
-    public string? Url { get; init; }
-    public string? Path { get; init; }
-    public int StartMs { get; init; }
-    public int DurationMs { get; init; }
 }
 
 /// <summary>

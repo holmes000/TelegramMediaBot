@@ -39,12 +39,6 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true \
             -o publish/
 
-      - name: Include scripts
-        run: |
-          if [ ! -f publish/scripts/ig_media.py ]; then
-            cp -r scripts/ publish/scripts/
-          fi
-
       - name: Include config files
         run: |
           cp appsettings.json publish/
