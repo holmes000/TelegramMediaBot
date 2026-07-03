@@ -32,10 +32,6 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
     {
         if (request.Shortcode is not { } shortcode) return null;
 
-        // Reels must yield a video; an image-only OG result is just the thumbnail.
-        var requireVideo = request.Url.Contains("/reel", StringComparison.OrdinalIgnoreCase) ||
-                           request.Url.Contains("/tv/", StringComparison.OrdinalIgnoreCase);
-
         foreach (var host in _cfg.EmbedFixerHosts)
         {
             try
@@ -53,7 +49,7 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
                 }
 
                 var html = await response.Content.ReadAsStringAsync(ct);
-                var item = ParseOgMedia(html, baseUri, requireVideo);
+                var item = ParseOgMedia(html, baseUri, request.RequireVideo);
                 if (item is null)
                 {
                     _log.LogWarning("Embed fixer {Host} returned no usable OG media for {Shortcode}", host, shortcode);
@@ -76,14 +72,19 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
         return null;
     }
 
-    /// <summary>Extracts the best media item from a fixer page's OG meta tags.</summary>
+    /// <summary>
+    /// Extracts the best media item from a fixer page's OG meta tags. When the
+    /// page self-identifies as a video but exposes no og:video URL, the
+    /// og:image is just the thumbnail — reject it so the next tier can deliver
+    /// the actual video.
+    /// </summary>
     public static IgMediaItem? ParseOgMedia(string html, Uri baseUri, bool requireVideo)
     {
         var video = MatchOgContent(html, "og:video") ?? MatchOgContent(html, "og:video:secure_url");
         if (video is not null && Resolve(video, baseUri) is { } videoUrl)
             return new IgMediaItem { Type = "video", Url = videoUrl };
 
-        if (requireVideo) return null;
+        if (requireVideo || DeclaresVideo(html)) return null;
 
         var image = MatchOgContent(html, "og:image");
         if (image is not null && Resolve(image, baseUri) is { } imageUrl)
@@ -91,6 +92,10 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
 
         return null;
     }
+
+    private static bool DeclaresVideo(string html) =>
+        MatchOgContent(html, "og:type")?.Contains("video", StringComparison.OrdinalIgnoreCase) == true ||
+        string.Equals(MatchOgContent(html, "twitter:card"), "player", StringComparison.OrdinalIgnoreCase);
 
     private static string? MatchOgContent(string html, string property)
     {

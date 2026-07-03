@@ -72,7 +72,7 @@ public sealed class InstagramService
 
     public async Task<IgMediaResult> GetMediaInfoAsync(string url, CancellationToken ct)
     {
-        var request = new IgRequest(url, IgUrl.ExtractShortcode(url));
+        var request = new IgRequest(url, IgUrl.ExtractShortcode(url), IgUrl.IsVideoUrl(url));
 
         // Skip tiers on cooldown — unless that would leave nothing to try.
         var anyAvailable = _tiers.Any(t => _health.IsAvailable(t.Name));
@@ -88,6 +88,15 @@ public sealed class InstagramService
             var result = await tier.TryFetchAsync(request, ct);
             if (result is { Items.Count: > 0 })
             {
+                // Safety net: for reels/tv an image-only result is a thumbnail,
+                // never the post — treat it as a tier failure and keep going.
+                if (request.RequireVideo && !result.Items.Any(i => i.Type == "video"))
+                {
+                    _log.LogWarning("Tier {Tier} returned only image items for a video URL (thumbnail) — skipping", tier.Name);
+                    _health.RecordFailure(tier.Name);
+                    continue;
+                }
+
                 _health.RecordSuccess(tier.Name);
                 _log.LogInformation("Extracted {N} items via tier: {Tier}", result.Items.Count, tier.Name);
                 return result;
@@ -108,7 +117,7 @@ public sealed class InstagramService
     /// </summary>
     public async Task<List<(string Tier, bool Ok, string? Error)>> RunDiagnosticsAsync(string url, CancellationToken ct)
     {
-        var request = new IgRequest(url, IgUrl.ExtractShortcode(url));
+        var request = new IgRequest(url, IgUrl.ExtractShortcode(url), IgUrl.IsVideoUrl(url));
         var results = new List<(string, bool, string?)>();
 
         foreach (var tier in _tiers)
@@ -116,7 +125,8 @@ public sealed class InstagramService
             try
             {
                 var result = await tier.TryFetchAsync(request, ct);
-                var ok = result is { Items.Count: > 0 };
+                var ok = result is { Items.Count: > 0 } &&
+                         (!request.RequireVideo || result.Items.Any(i => i.Type == "video"));
                 if (ok) _health.RecordSuccess(tier.Name); else _health.RecordFailure(tier.Name);
                 results.Add((tier.Name, ok, ok ? null : "no media returned"));
             }

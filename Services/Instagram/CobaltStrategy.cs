@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using TelegramMediaBot.Helpers;
 using TelegramMediaBot.Models;
 
 namespace TelegramMediaBot.Services.Instagram;
@@ -63,13 +64,21 @@ public sealed class CobaltStrategy : IIgStrategy
                 request.Headers.Add("Referer", "https://cobalt.tools/");
             }
             request.Content = JsonContent.Create(new { url });
+            // Some Cobalt builds match Content-Type exactly — strip "; charset=utf-8"
+            request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
 
             var response = await _http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
             {
                 // The local sidecar should always answer — surface its failures.
+                // Cobalt uses 400 for both bad requests and extraction errors; the
+                // JSON body's error.code says which, so log it.
                 if (isLocal)
-                    _log.LogWarning("Local Cobalt {Instance} returned HTTP {Code}", instance, (int)response.StatusCode);
+                {
+                    var body = await SafeReadAsync(response, ct);
+                    _log.LogWarning("Local Cobalt {Instance} returned HTTP {Code}: {Body}",
+                        instance, (int)response.StatusCode, body);
+                }
                 return null; // Public instances: skip silently to burn through bad ones fast
             }
 
@@ -91,10 +100,9 @@ public sealed class CobaltStrategy : IIgStrategy
             if (status is "tunnel" or "redirect")
             {
                 var mediaUrl = root.GetProperty("url").GetString();
-                var type = (mediaUrl?.Contains(".jpg") == true || mediaUrl?.Contains(".webp") == true) ? "image" : "video";
 
                 if (!string.IsNullOrEmpty(mediaUrl))
-                    items.Add(new IgMediaItem { Type = type, Url = mediaUrl });
+                    items.Add(new IgMediaItem { Type = GuessType(mediaUrl), Url = mediaUrl });
             }
             else if (status == "picker")
             {
@@ -120,6 +128,36 @@ public sealed class CobaltStrategy : IIgStrategy
         catch (Exception)
         {
             return null; // Network error or bad JSON — skip
+        }
+    }
+
+    /// <summary>
+    /// Classifies a tunnel/redirect URL as image or video. Tunnel URLs carry
+    /// the real name in the filename= query parameter; a naive substring check
+    /// misreads video URLs whose query mentions a .jpg thumbnail. Defaults to
+    /// video when the extension is unknown.
+    /// </summary>
+    public static string GuessType(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "video";
+
+        var filename = System.Web.HttpUtility.ParseQueryString(uri.Query)["filename"];
+        var ext = Path.GetExtension(filename ?? "").TrimStart('.');
+        if (ext.Length == 0) ext = Path.GetExtension(uri.AbsolutePath).TrimStart('.');
+
+        return FileTypeHelper.Classify(ext) == "image" ? "image" : "video";
+    }
+
+    private static async Task<string> SafeReadAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            return body.Length > 300 ? body[..300] + "..." : body;
+        }
+        catch
+        {
+            return "(unreadable body)";
         }
     }
 
