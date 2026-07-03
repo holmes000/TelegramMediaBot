@@ -6,9 +6,9 @@ namespace TelegramMediaBot.Services;
 /// <summary>
 /// Orchestrator — routes URLs to the optimal tool chain:
 ///
-/// Instagram (Cobalt API):
+/// Instagram (InstagramService):
 ///   • ALL Instagram URLs routed here.
-///   • Single API call gets direct CDN URLs.
+///   • Anonymous GraphQL / embed page → direct CDN URLs (Cobalt as fallback).
 ///   • Sends CDN URLs directly to Telegram (no disk, no ffmpeg).
 ///
 /// TikTok:
@@ -47,7 +47,7 @@ public sealed class MediaDownloadService
             // ── ALL Instagram URLs go to the Cobalt API ────
             if (UrlHelper.IsInstagramUrl(url))
             {
-                _log.LogInformation("[{Job}] Instagram URL → Cobalt API", job);
+                _log.LogInformation("[{Job}] Instagram URL → InstagramService", job);
                 return await ViaInstagramApi(url, job, timeout);
             }
 
@@ -89,7 +89,7 @@ public sealed class MediaDownloadService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Instagram Cobalt API path (Lightning Fast, No Disk)
+    // Instagram path (GraphQL/embed first, Cobalt fallback — No Disk)
     // ═══════════════════════════════════════════════════════════════════
 
     private async Task<DownloadResult> ViaInstagramApi(string url, string job, CancellationToken ct)
@@ -99,7 +99,7 @@ public sealed class MediaDownloadService
         if (info.HasError)
         {
             // Do NOT fall back to gallery-dl. Gallery-dl cannot scrape IG without cookies.
-            _log.LogWarning("[{Job}] Cobalt API error: {Err}", job, info.Error);
+            _log.LogWarning("[{Job}] Instagram extraction error: {Err}", job, info.Error);
             return DownloadResult.Fail($"Failed to fetch from Instagram: {info.Error}");
         }
 

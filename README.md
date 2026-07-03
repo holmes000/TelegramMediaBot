@@ -2,7 +2,7 @@
 
 A C#/.NET 8 Telegram bot that downloads TikTok and Instagram media — videos, slideshows, carousels, stories, and image-with-music posts.
 
-**Instagram** uses the private (mobile) API via [instagrapi](https://github.com/subzeroid/instagrapi) — one API call gets everything.
+**Instagram** uses Instagram's anonymous web GraphQL endpoint (no account or cookies needed), with the public embed page and community [Cobalt](https://github.com/imputnet/cobalt) instances as fallbacks.
 **TikTok** uses yt-dlp for videos and gallery-dl for photo slideshows.
 **ffmpeg** merges images + audio into slideshow videos when needed.
 
