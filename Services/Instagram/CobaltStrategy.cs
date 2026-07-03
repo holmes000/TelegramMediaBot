@@ -53,6 +53,9 @@ public sealed class CobaltStrategy : IIgStrategy
         try
         {
             var request = new HttpRequestMessage(HttpMethod.Post, instance + "/");
+            // Cobalt strictly requires Accept: application/json — per-request header
+            // overrides the shared client's Accept: */*, which Cobalt rejects with 400
+            request.Headers.Accept.ParseAdd("application/json");
             if (!isLocal)
             {
                 // Browser-ish headers to get past public instances' WAFs
@@ -63,7 +66,12 @@ public sealed class CobaltStrategy : IIgStrategy
 
             var response = await _http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
-                return null; // Skip silently to burn through bad instances fast
+            {
+                // The local sidecar should always answer — surface its failures.
+                if (isLocal)
+                    _log.LogWarning("Local Cobalt {Instance} returned HTTP {Code}", instance, (int)response.StatusCode);
+                return null; // Public instances: skip silently to burn through bad ones fast
+            }
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);

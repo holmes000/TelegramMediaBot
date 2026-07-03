@@ -46,11 +46,19 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
                 httpRequest.Headers.TryAddWithoutValidation("User-Agent", BotUserAgent);
 
                 using var response = await _http.SendAsync(httpRequest, ct);
-                if (!response.IsSuccessStatusCode) continue;
+                if (!response.IsSuccessStatusCode)
+                {
+                    _log.LogWarning("Embed fixer {Host} returned HTTP {Code}", host, (int)response.StatusCode);
+                    continue;
+                }
 
                 var html = await response.Content.ReadAsStringAsync(ct);
                 var item = ParseOgMedia(html, baseUri, requireVideo);
-                if (item is null) continue;
+                if (item is null)
+                {
+                    _log.LogWarning("Embed fixer {Host} returned no usable OG media for {Shortcode}", host, shortcode);
+                    continue;
+                }
 
                 _log.LogInformation("Embed fixer {Host} resolved {Shortcode}", host, shortcode);
                 return new IgMediaResult { Items = [item] };
