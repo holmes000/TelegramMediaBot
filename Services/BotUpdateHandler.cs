@@ -108,6 +108,7 @@ public sealed class BotUpdateHandler
         _ = SendTypingLoopAsync(bot, chat, typingCts.Token);
 
         DownloadResult? r = null;
+        DownloadResult? diskFallback = null;
         try
         {
             r = await _dl.ProcessUrlAsync(url, ct);
@@ -117,7 +118,7 @@ public sealed class BotUpdateHandler
 
             // Dispatch to the right send method based on delivery type
             if      (r.IsStreamed)                    await SendStream(bot, chat, reply, r, ct);
-            else if (r.MediaUrls is { Count: > 0 })  await SendByUrl(bot, chat, reply, r, ct);
+            else if (r.MediaUrls is { Count: > 0 })  diskFallback = await SendByUrlWithFallback(bot, chat, reply, r, ct);
             else if (r.AlbumPaths is { Count: > 0 })  await SendAlbum(bot, chat, reply, r, ct);
             else if (r.VideoPath is not null)          await SendVideo(bot, chat, reply, r, ct);
             else if (r.ImagePaths is { Count: > 0 })   await SendPhotos(bot, chat, reply, r, ct);
@@ -134,18 +135,44 @@ public sealed class BotUpdateHandler
             typingCts.Cancel();
             typingCts.Dispose();
             if (r is not null) { _dl.CleanupWorkDir(r); r.Dispose(); }
+            if (diskFallback is not null) { _dl.CleanupWorkDir(diskFallback); diskFallback.Dispose(); }
         }
     }
 
     // ── Send methods ─────────────────────────────────────────────────
 
-    private static async Task SendStream(ITelegramBotClient bot, long chat, ReplyParameters reply, DownloadResult r, CancellationToken ct)
+    private static async Task SendStream(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
     {
         await bot.SendVideo(chat, InputFile.FromStream(r.VideoStream!, "video.mp4"),
             caption: r.Caption, replyParameters: reply, supportsStreaming: true, cancellationToken: ct);
     }
 
-    private static async Task SendByUrl(ITelegramBotClient bot, long chat, ReplyParameters reply, DownloadResult r, CancellationToken ct)
+    /// <summary>
+    /// Sends CDN URLs directly (Telegram fetches them server-side). If Telegram
+    /// refuses — most commonly its ~20 MB limit on URL-based video sends —
+    /// downloads the media ourselves and re-sends as uploads. Returns the
+    /// disk-based result (if any) so the caller can clean up its temp files.
+    /// </summary>
+    private async Task<DownloadResult?> SendByUrlWithFallback(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
+    {
+        try
+        {
+            await SendByUrl(bot, chat, reply, r, ct);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning("URL send failed ({Msg}) — downloading media for re-upload", ex.Message);
+
+            var disk = await _dl.DownloadMediaUrlsToDiskAsync(r, ct);
+            if      (disk.VideoPath is not null)         await SendVideo(bot, chat, reply, disk, ct);
+            else if (disk.AlbumPaths is { Count: > 0 })  await SendAlbum(bot, chat, reply, disk, ct);
+            else if (disk.ImagePaths is { Count: > 0 })  await SendPhotos(bot, chat, reply, disk, ct);
+            return disk;
+        }
+    }
+
+    private static async Task SendByUrl(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
     {
         var items = r.MediaUrls!;
         if (items.Count == 1)
@@ -162,7 +189,7 @@ public sealed class BotUpdateHandler
         }
     }
 
-    private static async Task SendVideo(ITelegramBotClient bot, long chat, ReplyParameters reply, DownloadResult r, CancellationToken ct)
+    private static async Task SendVideo(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
     {
         var fi = new FileInfo(r.VideoPath!);
         if (fi.Length > 50 * 1024 * 1024)
@@ -175,7 +202,7 @@ public sealed class BotUpdateHandler
         await bot.SendVideo(chat, InputFile.FromStream(stream, "video.mp4"), caption: r.Caption, replyParameters: reply, supportsStreaming: true, cancellationToken: ct);
     }
 
-    private static async Task SendPhotos(ITelegramBotClient bot, long chat, ReplyParameters reply, DownloadResult r, CancellationToken ct)
+    private static async Task SendPhotos(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
     {
         var imgs = r.ImagePaths!;
         if (imgs.Count == 1)
@@ -202,7 +229,7 @@ public sealed class BotUpdateHandler
         }
     }
 
-    private static async Task SendAlbum(ITelegramBotClient bot, long chat, ReplyParameters reply, DownloadResult r, CancellationToken ct)
+    private static async Task SendAlbum(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, CancellationToken ct)
     {
         var paths = r.AlbumPaths!;
         if (paths.Count == 1)

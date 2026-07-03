@@ -2,9 +2,12 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    depends_on:
+      - cobalt
     environment:
       - Bot__Token=${BOT_TOKEN}
-      - Bot__InstagramSessionId=${INSTAGRAM_SESSION_ID}
+      - Bot__CobaltLocalUrl=http://cobalt:9000
+      - Bot__AdminChatId=${ADMIN_CHAT_ID:-}
     volumes:
       - ./cookies:/app/cookies
       - ./data:/app/data
@@ -13,3 +16,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Self-hosted Cobalt: community-maintained media extraction on our own IP.
+  # Not exposed publicly — only the bot reaches it over the compose network.
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
+    restart: unless-stopped
+    environment:
+      - API_URL=http://cobalt:9000/ # tunnel links must resolve inside the compose network
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Pulls upstream Cobalt fixes daily (only containers with the enable label).
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    command: --label-enable --cleanup --interval 86400
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "2"

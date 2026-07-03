@@ -6,9 +6,9 @@ namespace TelegramMediaBot.Services;
 /// <summary>
 /// Orchestrator — routes URLs to the optimal tool chain:
 ///
-/// Instagram (Cobalt API):
+/// Instagram (InstagramService):
 ///   • ALL Instagram URLs routed here.
-///   • Single API call gets direct CDN URLs.
+///   • Anonymous GraphQL / embed page → direct CDN URLs (Cobalt as fallback).
 ///   • Sends CDN URLs directly to Telegram (no disk, no ffmpeg).
 ///
 /// TikTok:
@@ -23,6 +23,17 @@ public sealed class MediaDownloadService
     private readonly InstagramService _ig;
     private readonly BotConfig _cfg;
     private readonly ILogger<MediaDownloadService> _log;
+
+    // Used only by the URL→disk fallback; per-call timeout comes from the CancellationToken.
+    private static readonly HttpClient _http = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
+    {
+        var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+        return http;
+    }
 
     public MediaDownloadService(
         YtDlpService ytDlp, GalleryDlService galleryDl, FfmpegService ffmpeg,
@@ -47,7 +58,7 @@ public sealed class MediaDownloadService
             // ── ALL Instagram URLs go to the Cobalt API ────
             if (UrlHelper.IsInstagramUrl(url))
             {
-                _log.LogInformation("[{Job}] Instagram URL → Cobalt API", job);
+                _log.LogInformation("[{Job}] Instagram URL → InstagramService", job);
                 return await ViaInstagramApi(url, job, timeout);
             }
 
@@ -89,7 +100,7 @@ public sealed class MediaDownloadService
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // Instagram Cobalt API path (Lightning Fast, No Disk)
+    // Instagram path (GraphQL/embed first, Cobalt fallback — No Disk)
     // ═══════════════════════════════════════════════════════════════════
 
     private async Task<DownloadResult> ViaInstagramApi(string url, string job, CancellationToken ct)
@@ -99,18 +110,90 @@ public sealed class MediaDownloadService
         if (info.HasError)
         {
             // Do NOT fall back to gallery-dl. Gallery-dl cannot scrape IG without cookies.
-            _log.LogWarning("[{Job}] Cobalt API error: {Err}", job, info.Error);
+            _log.LogWarning("[{Job}] Instagram extraction error: {Err}", job, info.Error);
             return DownloadResult.Fail($"Failed to fetch from Instagram: {info.Error}");
         }
 
         if (info.Items.Count == 0)
             return DownloadResult.Fail("No media found in this post.");
 
-        // Cobalt returns raw CDN URLs pre-merged. Send directly to Telegram.
         var mediaUrls = info.Items.Select(i => (i.Url, i.Type)).ToList();
+
+        // Tunnel URLs from the local Cobalt sidecar are only reachable inside
+        // the compose network — Telegram can't fetch them. Download here instead.
+        if (HasLocalUrl(mediaUrls))
+        {
+            _log.LogInformation("[{Job}] Local Cobalt tunnel URLs → downloading to disk", job);
+            var urlResult = new DownloadResult { Success = true, MediaUrls = mediaUrls, Caption = info.Caption };
+            return await DownloadMediaUrlsToDiskAsync(urlResult, ct);
+        }
+
+        // Direct CDN URLs. Send straight to Telegram (no disk).
         _log.LogInformation("[{Job}] Sending {N} items via URL (no disk)", job, mediaUrls.Count);
-        
-        return new DownloadResult { Success = true, MediaUrls = mediaUrls };
+        return new DownloadResult { Success = true, MediaUrls = mediaUrls, Caption = info.Caption };
+    }
+
+    /// <summary>
+    /// Fallback when Telegram refuses to fetch a CDN URL itself (its URL-based
+    /// sends are capped at ~20 MB for video / 5 MB for photos): download the
+    /// items to disk here and return a file-based result so the caller can
+    /// re-send them as uploads. Throws on failure — the caller decides how to
+    /// surface the original send error.
+    /// </summary>
+    public async Task<DownloadResult> DownloadMediaUrlsToDiskAsync(DownloadResult src, CancellationToken ct)
+    {
+        var items = src.MediaUrls ?? throw new InvalidOperationException("Result has no MediaUrls.");
+        var job = Guid.NewGuid().ToString("N")[..8];
+        var dir = MakeWorkDir(job);
+        _log.LogInformation("[{Job}] Downloading {N} CDN URLs to disk for re-upload", job, items.Count);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+
+        var paths = new List<string>();
+        var n = 0;
+        foreach (var (url, category) in items)
+        {
+            n++;
+            var ext = GuessExtension(url, category);
+            var path = Path.Combine(dir, $"{n:D3}{ext}");
+
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            response.EnsureSuccessStatusCode();
+            await using var fs = File.Create(path);
+            await response.Content.CopyToAsync(fs, cts.Token);
+            paths.Add(path);
+        }
+
+        var vids = paths.Where(FileTypeHelper.IsVideo).ToList();
+
+        if (paths.Count == 1 && vids.Count == 1)
+            return new DownloadResult { Success = true, VideoPath = paths[0], Caption = src.Caption };
+        if (vids.Count == 0)
+            return new DownloadResult { Success = true, ImagePaths = paths, Caption = src.Caption };
+        return new DownloadResult { Success = true, AlbumPaths = paths, Caption = src.Caption };
+    }
+
+    /// <summary>True if any media URL points at the self-hosted Cobalt instance.</summary>
+    private bool HasLocalUrl(List<(string Url, string Category)> mediaUrls)
+    {
+        if (string.IsNullOrWhiteSpace(_cfg.CobaltLocalUrl) ||
+            !Uri.TryCreate(_cfg.CobaltLocalUrl, UriKind.Absolute, out var local))
+            return false;
+
+        return mediaUrls.Any(m =>
+            Uri.TryCreate(m.Url, UriKind.Absolute, out var u) &&
+            string.Equals(u.Host, local.Host, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Extension from the URL path when recognizable, else by category.</summary>
+    private static string GuessExtension(string url, string category)
+    {
+        var path = url.Split('?')[0];
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        var matchesCategory = category == "video" ? FileTypeHelper.IsVideo(path) : FileTypeHelper.IsImage(path);
+        if (ext.Length > 0 && matchesCategory) return ext;
+        return category == "video" ? ".mp4" : ".jpg";
     }
 
     // ═══════════════════════════════════════════════════════════════════

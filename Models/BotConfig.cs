@@ -15,31 +15,37 @@ public sealed class BotConfig
     public string YtDlpPath { get; set; } = DefaultToolPath("yt-dlp");
     public string FfmpegPath { get; set; } = DefaultToolPath("ffmpeg");
     public string GalleryDlPath { get; set; } = DefaultToolPath("gallery-dl");
-    public string PythonPath { get; set; } = OperatingSystem.IsWindows() ? "python" : "python3";
-    public string IgScript { get; set; } = Path.Combine("scripts", "ig_media.py");
 
-    // ── Cookies / auth ────────────────────────────────────────────────
+    // ── Cookies (optional, fed to yt-dlp / gallery-dl for TikTok) ─────
     public string CookiesFile { get; set; } = Path.Combine("cookies", "instagram_cookies.txt");
     public string? CookiesFromBrowser { get; set; }
-
-    // ── Instagram private API (for image-with-music audio) ────────────
-    public string? InstagramSessionId { get; set; }
-    public string? InstagramUsername { get; set; }
-    public string? InstagramPassword { get; set; }
-    public string IgSessionFile { get; set; } = Path.Combine("data", "ig_session.json");
 
     // ── Processing ────────────────────────────────────────────────────
     public string TempDir { get; set; } = Path.Combine("data", "temp");
     public int MaxFileSizeMb { get; set; } = 50;
     public int SlideshowImageDurationSec { get; set; } = 3;
 
-    // ── Helpers ───────────────────────────────────────────────────────
+    // ── Instagram extraction chain ────────────────────────────────────
 
-    /// <summary>Returns true if any Instagram login method is configured.</summary>
-    public bool HasInstagramAuth =>
-        !string.IsNullOrWhiteSpace(InstagramSessionId) ||
-        (!string.IsNullOrWhiteSpace(InstagramUsername) && !string.IsNullOrWhiteSpace(InstagramPassword)) ||
-        File.Exists(IgSessionFile);
+    /// <summary>Self-hosted Cobalt instance (e.g. http://cobalt:9000). Tried before public instances.</summary>
+    public string? CobaltLocalUrl { get; set; }
+
+    /// <summary>Chat id that receives canary alerts when extraction tiers break. String so an empty env var binds cleanly.</summary>
+    public string? AdminChatId { get; set; }
+
+    /// <summary>Known-public post used by the canary to test each extraction tier.</summary>
+    public string CanaryUrl { get; set; } = "https://www.instagram.com/p/BsOGulcndj-/";
+
+    /// <summary>Manual override for the Instagram GraphQL doc_id (normally auto-discovered).</summary>
+    public string? IgDocId { get; set; }
+
+    /// <summary>InstaFix-style embed-fixer hosts, tried in order.</summary>
+    public string[] EmbedFixerHosts { get; set; } = ["ddinstagram.com", "kkinstagram.com", "instagramez.com"];
+
+    public long? AdminChat =>
+        long.TryParse(AdminChatId, out var id) ? id : null;
+
+    // ── Helpers ───────────────────────────────────────────────────────
 
     /// <summary>Returns true if a valid Netscape cookies file exists.</summary>
     public bool HasCookiesFile
@@ -57,18 +63,6 @@ public sealed class BotConfig
             }
             catch { return false; }
         }
-    }
-
-    /// <summary>
-    /// Builds the yt-dlp / gallery-dl cookie argument string.
-    /// </summary>
-    public string BuildCookieArgs()
-    {
-        if (HasCookiesFile)
-            return $"--cookies \"{CookiesFile}\"";
-        if (!string.IsNullOrWhiteSpace(CookiesFromBrowser))
-            return $"--cookies-from-browser {CookiesFromBrowser}";
-        return "";
     }
 
     /// <summary>

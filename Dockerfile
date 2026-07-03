@@ -6,7 +6,7 @@ RUN dotnet publish -c Release -o /app
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 
-# Install external tools (Removed instagrapi and requests)
+# Install external tools (python3 is needed by gallery-dl)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg python3 python3-pip curl && \
     curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \

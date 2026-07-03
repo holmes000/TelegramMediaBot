@@ -15,9 +15,4 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="8.*" />
   </ItemGroup>
 
-  <!-- Copy scripts to output/publish (appsettings.json is auto-included by Worker SDK) -->
-  <ItemGroup>
-    <Content Include="scripts/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
 </Project>

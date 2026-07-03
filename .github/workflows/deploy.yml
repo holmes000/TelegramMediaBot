@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 15
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -19,7 +20,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: BOT_TOKEN
+          envs: BOT_TOKEN,ADMIN_CHAT_ID
           script: |
             set -e
             REPO_DIR="$HOME/TelegramMediaBot"
@@ -52,7 +53,7 @@ jobs:
 
             # ── Write .env ────────────────────────────────────────
 
-            printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN" | sudo tee .env > /dev/null
+            printf 'BOT_TOKEN=%s\nADMIN_CHAT_ID=%s\n' "$BOT_TOKEN" "$ADMIN_CHAT_ID" | sudo tee .env > /dev/null
             sudo chmod 644 .env
 
             # ── Build and deploy ──────────────────────────────────
