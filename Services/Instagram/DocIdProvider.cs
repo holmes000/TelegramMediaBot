@@ -53,25 +53,35 @@ public sealed partial class DocIdProvider
     public void ReportSuccess() => Interlocked.Exchange(ref _consecutiveFailures, 0);
 
     /// <summary>
-    /// Called when GraphQL returns a response without media. Two strikes in a
-    /// row trigger re-discovery, throttled to once per hour.
+    /// Called when GraphQL answers HTTP 200 but without media — the signature
+    /// of a stale doc_id. (HTTP-level blocks must NOT be reported here; no
+    /// doc_id fixes an IP block.) Two strikes in a row kick off re-discovery
+    /// in the background — throttled to once per hour — so user requests never
+    /// wait on the bundle scan.
     /// </summary>
-    public async Task ReportFailureAsync(string shortcode, CancellationToken ct)
+    public void ReportFailure(string shortcode)
     {
         if (Interlocked.Increment(ref _consecutiveFailures) < 2) return;
         if (DateTime.UtcNow - _lastDiscoveryAttempt < TimeSpan.FromHours(1)) return;
 
-        await _discoveryLock.WaitAsync(ct);
-        try
+        _ = Task.Run(async () =>
         {
-            if (DateTime.UtcNow - _lastDiscoveryAttempt < TimeSpan.FromHours(1)) return;
-            _lastDiscoveryAttempt = DateTime.UtcNow;
-            await DiscoverAsync(shortcode, ct);
-        }
-        finally
-        {
-            _discoveryLock.Release();
-        }
+            await _discoveryLock.WaitAsync();
+            try
+            {
+                if (DateTime.UtcNow - _lastDiscoveryAttempt < TimeSpan.FromHours(1)) return;
+                _lastDiscoveryAttempt = DateTime.UtcNow;
+                await DiscoverAsync(shortcode, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Background doc_id discovery failed: {Msg}", ex.Message);
+            }
+            finally
+            {
+                _discoveryLock.Release();
+            }
+        });
     }
 
     private async Task DiscoverAsync(string shortcode, CancellationToken ct)
