@@ -40,30 +40,16 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
             }
 
             var html = await response.Content.ReadAsStringAsync(ct);
-            var items = new List<IgMediaItem>();
+            var item = ParseEmbedMedia(html, request.RequireVideo);
 
-            // Video URL lives inside embedded JSON, escaped (\" \/ &).
-            var videoMatch = EmbedVideoUrlRegex().Match(html);
-            if (videoMatch.Success &&
-                JsonSerializer.Deserialize<string>($"\"{videoMatch.Groups[1].Value}\"") is { Length: > 0 } videoUrl)
+            if (item is null)
             {
-                items.Add(new IgMediaItem { Type = "video", Url = videoUrl });
-            }
-            else
-            {
-                // Image posts render an <img class="EmbeddedMediaImage"> tag with HTML-escaped src.
-                var imgMatch = EmbedImageRegex().Match(html);
-                if (imgMatch.Success)
-                    items.Add(new IgMediaItem { Type = "image", Url = WebUtility.HtmlDecode(imgMatch.Groups[1].Value) });
-            }
-
-            if (items.Count == 0)
-            {
-                _log.LogWarning("Instagram embed page returned HTTP 200 but no media markup (likely a login/challenge wall)");
+                _log.LogWarning("Instagram embed page returned HTTP 200 but no usable media " +
+                    "(login/challenge wall, or a video post whose embed only exposes the thumbnail)");
                 return null;
             }
 
-            return new IgMediaResult { Items = items };
+            return new IgMediaResult { Items = [item] };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -77,9 +63,42 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
         }
     }
 
+    /// <summary>
+    /// Extracts the media item from embed-page HTML. The EmbeddedMediaImage tag
+    /// is the *poster thumbnail* when the post is a video, so it is only
+    /// accepted when nothing marks the post as video — otherwise a reel would
+    /// be delivered as a JPG.
+    /// </summary>
+    public static IgMediaItem? ParseEmbedMedia(string html, bool requireVideo)
+    {
+        // Video URL lives inside embedded JSON, escaped (\" \/ &).
+        var videoMatch = EmbedVideoUrlRegex().Match(html);
+        if (videoMatch.Success &&
+            JsonSerializer.Deserialize<string>($"\"{videoMatch.Groups[1].Value}\"") is { Length: > 0 } videoUrl)
+        {
+            return new IgMediaItem { Type = "video", Url = videoUrl };
+        }
+
+        if (requireVideo || DeclaresVideo(html)) return null;
+
+        // Image posts render an <img class="EmbeddedMediaImage"> tag with HTML-escaped src.
+        var imgMatch = EmbedImageRegex().Match(html);
+        return imgMatch.Success
+            ? new IgMediaItem { Type = "image", Url = WebUtility.HtmlDecode(imgMatch.Groups[1].Value) }
+            : null;
+    }
+
+    private static bool DeclaresVideo(string html) =>
+        (MediaTypeRegex().Match(html) is { Success: true } m &&
+         m.Groups[1].Value.Contains("Video", StringComparison.OrdinalIgnoreCase)) ||
+        html.Contains("\"is_video\":true", StringComparison.OrdinalIgnoreCase);
+
     [GeneratedRegex("\"video_url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)+)\"")]
     private static partial Regex EmbedVideoUrlRegex();
 
     [GeneratedRegex("class=\"EmbeddedMediaImage\"[^>]+src=\"([^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex EmbedImageRegex();
+
+    [GeneratedRegex("data-media-type=\"([^\"]+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex MediaTypeRegex();
 }
