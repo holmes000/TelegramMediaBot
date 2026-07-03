@@ -56,7 +56,16 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
                     continue;
                 }
 
-                _log.LogInformation("Embed fixer {Host} resolved {Shortcode}", host, shortcode);
+                // Some fixers put the thumbnail URL in og:video when their own
+                // extraction only got the poster — verify the bytes are video.
+                if (item.Type == "video" && !await ServesVideoBytesAsync(item.Url, ct))
+                {
+                    _log.LogWarning("Embed fixer {Host} og:video for {Shortcode} does not serve video content ({Url}) — trying next host",
+                        host, shortcode, item.Url);
+                    continue;
+                }
+
+                _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → {Type} {Url}", host, shortcode, item.Type, item.Url);
                 return new IgMediaResult { Items = [item] };
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -91,6 +100,58 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
             return new IgMediaItem { Type = "image", Url = imageUrl };
 
         return null;
+    }
+
+    /// <summary>
+    /// Fetches the first bytes of a claimed video URL and checks it actually
+    /// serves video. Trusts a video/* Content-Type, rejects image/*, and
+    /// sniffs file magic when the type is ambiguous (octet-stream etc.).
+    /// </summary>
+    private async Task<bool> ServesVideoBytesAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("User-Agent", BotUserAgent);
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 4095);
+
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode) return false;
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
+            if (mediaType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return true;
+            if (mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return false;
+
+            var buffer = new byte[16];
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            var read = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, ct);
+            return SniffIsVideo(buffer.AsSpan(0, read));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>File-magic sniff: true for MP4/MOV/WebM, false for known image formats, true when unknown.</summary>
+    public static bool SniffIsVideo(ReadOnlySpan<byte> header)
+    {
+        // MP4/MOV: "ftyp" at offset 4
+        if (header.Length >= 8 && header[4] == 'f' && header[5] == 't' && header[6] == 'y' && header[7] == 'p') return true;
+        // WebM/MKV: EBML magic
+        if (header.Length >= 4 && header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3) return true;
+        // JPEG
+        if (header.Length >= 2 && header[0] == 0xFF && header[1] == 0xD8) return false;
+        // PNG
+        if (header.Length >= 4 && header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G') return false;
+        // GIF
+        if (header.Length >= 3 && header[0] == 'G' && header[1] == 'I' && header[2] == 'F') return false;
+        // WEBP: RIFF....WEBP
+        if (header.Length >= 12 && header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
+            header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P') return false;
+
+        // Unknown container — don't over-reject
+        return true;
     }
 
     private static bool DeclaresVideo(string html) =>
