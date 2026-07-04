@@ -94,7 +94,9 @@ public sealed class YtDlpService
 
     public Process StartStreamingDownload(string url)
     {
-        var args = $"--no-warnings --no-playlist --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
+        // Piping to stdout can't ffmpeg-merge separate video+audio streams, which
+        // yields silent videos — prefer the best single pre-muxed format.
+        var args = $"--no-warnings --no-playlist -f \"b/bv*+ba\" --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
         _log.LogDebug("yt-dlp stream: {Args}", args);
         return ProcessRunner.StartProcess(_cfg.YtDlpPath, args);
     }

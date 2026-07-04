@@ -106,7 +106,7 @@ public sealed class GraphQlStrategy : IIgStrategy
             if (items.Count == 0) return null;
 
             _docIds.ReportSuccess();
-            return new IgMediaResult { Items = items, Caption = caption };
+            return new IgMediaResult { Items = items, Caption = caption, Authoritative = true };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

@@ -119,7 +119,7 @@ public sealed class CobaltStrategy : IIgStrategy
             if (items.Count == 0) return null;
 
             _log.LogInformation("Extracted {N} items via Cobalt {Instance}", items.Count, instance);
-            return new IgMediaResult { Items = items };
+            return new IgMediaResult { Items = items, Authoritative = true };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
