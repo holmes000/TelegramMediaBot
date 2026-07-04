@@ -10,6 +10,14 @@ public sealed class IgMediaResult
     public List<IgMediaItem> Items { get; init; } = [];
     public string? Error { get; init; }
 
+    /// <summary>
+    /// True when the tier fully resolved the post, so item types and count are
+    /// trustworthy (GraphQL, Cobalt, or the embed page with an explicit image
+    /// marker). Non-authoritative image results may be cropped previews or
+    /// just the first item of a carousel — only used as a last resort.
+    /// </summary>
+    public bool Authoritative { get; init; }
+
     public bool HasError => Error is not null;
 }
 
@@ -76,6 +84,7 @@ public sealed class InstagramService
 
         // Skip tiers on cooldown — unless that would leave nothing to try.
         var anyAvailable = _tiers.Any(t => _health.IsAvailable(t.Name));
+        IgMediaResult? partialFallback = null;
 
         foreach (var tier in _tiers)
         {
@@ -88,12 +97,14 @@ public sealed class InstagramService
             var result = await tier.TryFetchAsync(request, ct);
             if (result is { Items.Count: > 0 })
             {
-                // Safety net: for reels/tv an image-only result is a thumbnail,
-                // never the post — treat it as a tier failure and keep going.
-                if (request.RequireVideo && !result.Items.Any(i => i.Type == "video"))
+                // Image-only results from tiers that didn't fully resolve the
+                // post may be cropped previews or just a carousel's first image.
+                // Hold as a fallback and let an authoritative tier (Cobalt/
+                // GraphQL) deliver the full, uncropped album.
+                if (!result.Authoritative && !result.Items.Any(i => i.Type == "video"))
                 {
-                    _log.LogWarning("Tier {Tier} returned only image items for a video URL (thumbnail) — skipping", tier.Name);
-                    _health.RecordFailure(tier.Name);
+                    partialFallback ??= result;
+                    _log.LogInformation("Tier {Tier} returned a non-authoritative image-only result — held as fallback", tier.Name);
                     continue;
                 }
 
@@ -103,6 +114,12 @@ public sealed class InstagramService
             }
 
             _health.RecordFailure(tier.Name);
+        }
+
+        if (partialFallback is not null)
+        {
+            _log.LogWarning("No tier fully resolved the post — using partial image fallback ({N} item/s)", partialFallback.Items.Count);
+            return partialFallback;
         }
 
         return new IgMediaResult
@@ -126,7 +143,9 @@ public sealed class InstagramService
             {
                 var result = await tier.TryFetchAsync(request, ct);
                 var ok = result is { Items.Count: > 0 } &&
-                         (!request.RequireVideo || result.Items.Any(i => i.Type == "video"));
+                         (result.Authoritative ||
+                          result.Items.Any(i => i.Type == "video") ||
+                          !request.RequireVideo);
                 if (ok) _health.RecordSuccess(tier.Name); else _health.RecordFailure(tier.Name);
                 results.Add((tier.Name, ok, ok ? null : "no media returned"));
             }

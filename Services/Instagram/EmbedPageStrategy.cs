@@ -40,7 +40,7 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
             }
 
             var html = await response.Content.ReadAsStringAsync(ct);
-            var item = ParseEmbedMedia(html, request.RequireVideo);
+            var (item, authoritative) = ParseEmbedMedia(html, request.RequireVideo);
 
             if (item is null)
             {
@@ -49,7 +49,7 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
                 return null;
             }
 
-            return new IgMediaResult { Items = [item] };
+            return new IgMediaResult { Items = [item], Authoritative = authoritative };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -64,34 +64,43 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
     }
 
     /// <summary>
-    /// Extracts the media item from embed-page HTML. The EmbeddedMediaImage tag
-    /// is the *poster thumbnail* when the post is a video, so it is only
-    /// accepted when nothing marks the post as video — otherwise a reel would
-    /// be delivered as a JPG.
+    /// Extracts the media item from embed-page HTML.
+    ///
+    /// The EmbeddedMediaImage tag means different things depending on the
+    /// post's data-media-type marker:
+    ///   GraphVideo   → it's the poster thumbnail; never deliver it.
+    ///   GraphImage   → it's the actual (single) image; authoritative — this
+    ///                  also covers photo posts shared via /reel/ links, since
+    ///                  Instagram mixes photos into the reels feed.
+    ///   GraphSidecar → it's only the first image of a carousel; usable as a
+    ///                  last resort, but a tier that can enumerate the full
+    ///                  album (Cobalt/GraphQL) should be preferred.
+    ///   no marker    → can't trust it for a video-hinted URL.
     /// </summary>
-    public static IgMediaItem? ParseEmbedMedia(string html, bool requireVideo)
+    public static (IgMediaItem? Item, bool Authoritative) ParseEmbedMedia(string html, bool requireVideo)
     {
         // Video URL lives inside embedded JSON, escaped (\" \/ &).
         var videoMatch = EmbedVideoUrlRegex().Match(html);
         if (videoMatch.Success &&
             JsonSerializer.Deserialize<string>($"\"{videoMatch.Groups[1].Value}\"") is { Length: > 0 } videoUrl)
         {
-            return new IgMediaItem { Type = "video", Url = videoUrl };
+            return (new IgMediaItem { Type = "video", Url = videoUrl }, true);
         }
 
-        if (requireVideo || DeclaresVideo(html)) return null;
+        var mediaType = MediaTypeRegex().Match(html) is { Success: true } m ? m.Groups[1].Value : "";
+        var declaresVideo = mediaType.Contains("Video", StringComparison.OrdinalIgnoreCase) ||
+                            html.Contains("\"is_video\":true", StringComparison.OrdinalIgnoreCase);
 
-        // Image posts render an <img class="EmbeddedMediaImage"> tag with HTML-escaped src.
+        if (declaresVideo) return (null, false);                 // video post, only the poster exposed
+        if (requireVideo && mediaType.Length == 0) return (null, false); // unmarked page for a reel URL — thumbnail risk
+
         var imgMatch = EmbedImageRegex().Match(html);
-        return imgMatch.Success
-            ? new IgMediaItem { Type = "image", Url = WebUtility.HtmlDecode(imgMatch.Groups[1].Value) }
-            : null;
-    }
+        if (!imgMatch.Success) return (null, false);
 
-    private static bool DeclaresVideo(string html) =>
-        (MediaTypeRegex().Match(html) is { Success: true } m &&
-         m.Groups[1].Value.Contains("Video", StringComparison.OrdinalIgnoreCase)) ||
-        html.Contains("\"is_video\":true", StringComparison.OrdinalIgnoreCase);
+        var item = new IgMediaItem { Type = "image", Url = WebUtility.HtmlDecode(imgMatch.Groups[1].Value) };
+        var isCompleteSingleImage = mediaType.Contains("GraphImage", StringComparison.OrdinalIgnoreCase);
+        return (item, isCompleteSingleImage);
+    }
 
     [GeneratedRegex("\"video_url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)+)\"")]
     private static partial Regex EmbedVideoUrlRegex();
