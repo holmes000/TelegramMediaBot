@@ -95,10 +95,29 @@ public sealed class YtDlpService
     public Process StartStreamingDownload(string url)
     {
         // Piping to stdout can't ffmpeg-merge separate video+audio streams, which
-        // yields silent videos — prefer the best single pre-muxed format.
-        var args = $"--no-warnings --no-playlist -f \"b/bv*+ba\" --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
+        // yields silent videos — prefer the best single pre-muxed format, and
+        // among those avoid TikTok's deliberately muted licensed-music variants.
+        var args = $"--no-warnings --no-playlist -f \"b[format_note!*=Muted]/b/bv*+ba\" --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
         _log.LogDebug("yt-dlp stream: {Args}", args);
         return ProcessRunner.StartProcess(_cfg.YtDlpPath, args);
+    }
+
+    /// <summary>Compact one-line format table for diagnostics.</summary>
+    public static string DescribeFormats(YtDlpMeta meta)
+    {
+        if (meta.Formats is not { Count: > 0 } formats) return "(no formats)";
+        var summary = string.Join(", ", formats.Select(f =>
+            $"{f.FormatId}({f.VideoCodec ?? "?"}/{f.AudioCodec ?? "?"}{(f.IsMuted ? ",MUTED" : "")})"));
+        return summary.Length > 500 ? summary[..500] + "..." : summary;
+    }
+
+    /// <summary>True when every pre-muxed format is a muted variant — TikTok strips licensed audio at the source.</summary>
+    public static bool AllCombinedFormatsMuted(YtDlpMeta meta)
+    {
+        var combined = meta.Formats?
+            .Where(f => f.VideoCodec is not (null or "none") && f.AudioCodec is not "none")
+            .ToList();
+        return combined is { Count: > 0 } && combined.All(f => f.IsMuted);
     }
 
     public bool IsLikelyVideo(YtDlpMeta? meta)
