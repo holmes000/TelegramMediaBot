@@ -234,7 +234,11 @@ public sealed class MediaDownloadService
 
         if (_ytDlp.IsLikelyVideo(meta))
         {
-            _log.LogInformation("[{Job}] Video → streaming", job);
+            _log.LogInformation("[{Job}] Video → streaming. Formats: {Formats}", job, YtDlpService.DescribeFormats(meta));
+
+            if (YtDlpService.AllCombinedFormatsMuted(meta))
+                _log.LogWarning("[{Job}] TikTok serves only muted variants of this video (licensed audio) — sound is stripped at the source", job);
+
             var proc = _ytDlp.StartStreamingDownload(url);
             return new DownloadResult
             {

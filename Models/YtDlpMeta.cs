@@ -17,8 +17,12 @@ public sealed class YtDlpMeta
 
 public sealed class YtDlpFormat
 {
-    [JsonPropertyName("format_id")]  public string? FormatId { get; set; }
-    [JsonPropertyName("ext")]        public string? Extension { get; set; }
-    [JsonPropertyName("vcodec")]     public string? VideoCodec { get; set; }
-    [JsonPropertyName("acodec")]     public string? AudioCodec { get; set; }
+    [JsonPropertyName("format_id")]   public string? FormatId { get; set; }
+    [JsonPropertyName("ext")]         public string? Extension { get; set; }
+    [JsonPropertyName("vcodec")]      public string? VideoCodec { get; set; }
+    [JsonPropertyName("acodec")]      public string? AudioCodec { get; set; }
+    [JsonPropertyName("format_note")] public string? FormatNote { get; set; }
+
+    /// <summary>TikTok serves deliberately silent variants of videos with licensed music; yt-dlp marks them "Muted".</summary>
+    public bool IsMuted => FormatNote?.Contains("Muted", StringComparison.OrdinalIgnoreCase) == true;
 }
