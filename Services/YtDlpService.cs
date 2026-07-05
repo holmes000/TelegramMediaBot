@@ -95,9 +95,11 @@ public sealed class YtDlpService
     public Process StartStreamingDownload(string url)
     {
         // Piping to stdout can't ffmpeg-merge separate video+audio streams, which
-        // yields silent videos — prefer the best single pre-muxed format, and
-        // among those avoid TikTok's deliberately muted licensed-music variants.
-        var args = $"--no-warnings --no-playlist -f \"b[format_note!*=Muted]/b/bv*+ba\" --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
+        // yields silent videos — prefer the best single pre-muxed format.
+        // Do NOT filter on format_note here: [format_note!*=Muted] excludes
+        // formats with no note at all, which are TikTok's clean play formats —
+        // that filter caused watermarked/outro downloads and empty streams.
+        var args = $"--no-warnings --no-playlist -f \"b/bv*+ba\" --merge-output-format mp4 {CookieArgs} -o - \"{url}\"";
         _log.LogDebug("yt-dlp stream: {Args}", args);
         return ProcessRunner.StartProcess(_cfg.YtDlpPath, args);
     }

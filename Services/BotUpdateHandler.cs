@@ -117,7 +117,7 @@ public sealed class BotUpdateHandler
             if (!r.Success) { await bot.EditMessageText(chat, status.MessageId, $"❌ {r.Error}", cancellationToken: ct); return; }
 
             // Dispatch to the right send method based on delivery type
-            if      (r.IsStreamed)                    await SendStream(bot, chat, reply, r, ct);
+            if      (r.IsStreamed)                    diskFallback = await SendStreamWithFallback(bot, chat, reply, r, url, ct);
             else if (r.MediaUrls is { Count: > 0 })  diskFallback = await SendByUrlWithFallback(bot, chat, reply, r, ct);
             else if (r.AlbumPaths is { Count: > 0 })  await SendAlbum(bot, chat, reply, r, ct);
             else if (r.VideoPath is not null)          await SendVideo(bot, chat, reply, r, ct);
@@ -145,6 +145,34 @@ public sealed class BotUpdateHandler
     {
         await bot.SendVideo(chat, InputFile.FromStream(r.VideoStream!, "video.mp4"),
             caption: r.Caption, replyParameters: reply, supportsStreaming: true, cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Streams yt-dlp's stdout to Telegram. If the stream send fails — e.g.
+    /// yt-dlp's picked format 403s and the pipe stays empty ("file must be
+    /// non-empty") — re-download to disk and upload that instead. Returns the
+    /// disk result (if any) so the caller can clean up its temp files.
+    /// </summary>
+    private async Task<DownloadResult?> SendStreamWithFallback(ITelegramBotClient bot, long chat, ReplyParameters? reply, DownloadResult r, string url, CancellationToken ct)
+    {
+        try
+        {
+            await SendStream(bot, chat, reply, r, ct);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning("Stream send failed ({Msg}) — retrying via disk download", ex.Message);
+            r.Dispose(); // kill the yt-dlp process before starting over
+
+            var disk = await _dl.RetryViaDiskAsync(url, ct);
+            if (!disk.Success) throw;
+
+            if      (disk.VideoPath is not null)         await SendVideo(bot, chat, reply, disk, ct);
+            else if (disk.AlbumPaths is { Count: > 0 })  await SendAlbum(bot, chat, reply, disk, ct);
+            else if (disk.ImagePaths is { Count: > 0 })  await SendPhotos(bot, chat, reply, disk, ct);
+            return disk;
+        }
     }
 
     /// <summary>
