@@ -134,6 +134,28 @@ public sealed class MediaDownloadService
     }
 
     /// <summary>
+    /// Fallback when a streamed yt-dlp send fails mid-flight (e.g. the picked
+    /// format 403s and the pipe is empty): re-download via the disk path,
+    /// where format merging and retries work normally.
+    /// </summary>
+    public async Task<DownloadResult> RetryViaDiskAsync(string url, CancellationToken ct)
+    {
+        var job = Guid.NewGuid().ToString("N")[..8];
+        _log.LogInformation("[{Job}] Disk retry for {Url}", job, url);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+        try
+        {
+            return await ViaYtDlpDisk(url, job, null, cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return DownloadResult.Fail("Download timed out. Try again later.");
+        }
+    }
+
+    /// <summary>
     /// Fallback when Telegram refuses to fetch a CDN URL itself (its URL-based
     /// sends are capped at ~20 MB for video / 5 MB for photos): download the
     /// items to disk here and return a file-based result so the caller can
