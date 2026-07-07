@@ -36,17 +36,36 @@ public sealed class CobaltStrategy : IIgStrategy
 
         if (local is not null)
         {
-            var result = await TryInstanceAsync(local, request.Url, isLocal: true, ct);
+            var result = await TryBoundedAsync(local, request.Url, isLocal: true, ct);
             if (result is { Items.Count: > 0 }) return result;
         }
 
         foreach (var instance in await GetPublicInstancesAsync(ct))
         {
-            var result = await TryInstanceAsync(instance, request.Url, isLocal: false, ct);
+            if (ct.IsCancellationRequested) break;
+            var result = await TryBoundedAsync(instance, request.Url, isLocal: false, ct);
             if (result is { Items.Count: > 0 }) return result;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// One instance attempt capped at 5 seconds, so the tier's overall budget
+    /// covers several instances instead of being eaten by one dead one.
+    /// </summary>
+    private async Task<IgMediaResult?> TryBoundedAsync(string instance, string url, bool isLocal, CancellationToken ct)
+    {
+        using var instanceCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        instanceCts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            return await TryInstanceAsync(instance, url, isLocal, instanceCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return null; // per-instance timeout, or tier budget — caller checks ct
+        }
     }
 
     private async Task<IgMediaResult?> TryInstanceAsync(string instance, string url, bool isLocal, CancellationToken ct)

@@ -32,6 +32,11 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
     {
         if (request.Shortcode is not { } shortcode) return null;
 
+        // A host's plain og:image is a cropped first-item preview. Hold it as
+        // a candidate and keep trying hosts — one that supports full-res album
+        // enumeration (or serves the video) is worth the extra requests.
+        IgMediaResult? croppedCandidate = null;
+
         foreach (var host in _cfg.EmbedFixerHosts)
         {
             try
@@ -58,25 +63,31 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
 
                 // Some fixers put the thumbnail URL in og:video when their own
                 // extraction only got the poster — verify the bytes are video.
-                if (item.Type == "video" && !await ServesVideoBytesAsync(item.Url, ct))
+                if (item.Type == "video")
                 {
-                    _log.LogWarning("Embed fixer {Host} og:video for {Shortcode} does not serve video content ({Url}) — trying next host",
-                        host, shortcode, item.Url);
-                    continue;
+                    if (!await ServesVideoBytesAsync(item.Url, ct))
+                    {
+                        _log.LogWarning("Embed fixer {Host} og:video for {Shortcode} does not serve video content ({Url}) — trying next host",
+                            host, shortcode, item.Url);
+                        continue;
+                    }
+
+                    _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → video {Url}", host, shortcode, item.Url);
+                    return new IgMediaResult { Items = [item] };
                 }
 
-                // og:image is a cropped preview and covers only the first item.
-                // InstaFix-style hosts expose /images/{code}/{n} redirecting to
-                // the full-res originals — enumerate them for the real album.
-                var items = new List<IgMediaItem> { item };
-                if (item.Type == "image")
+                // Image post: InstaFix-style hosts expose /images/{code}/{n}
+                // redirecting to the full-res originals — enumerate the album.
+                var album = await EnumerateAlbumImagesAsync(baseUri, shortcode, ct);
+                if (album.Count > 0)
                 {
-                    var album = await EnumerateAlbumImagesAsync(baseUri, shortcode, ct);
-                    if (album.Count > 0) items = album;
+                    _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → {N} full-res image/s", host, shortcode, album.Count);
+                    return new IgMediaResult { Items = album };
                 }
 
-                _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → {N} item/s ({Type})", host, shortcode, items.Count, item.Type);
-                return new IgMediaResult { Items = items };
+                _log.LogInformation("Embed fixer {Host} only offers the cropped og:image preview for {Shortcode} — held, trying next host",
+                    host, shortcode);
+                croppedCandidate ??= new IgMediaResult { Items = [item] };
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -88,7 +99,7 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
             }
         }
 
-        return null;
+        return croppedCandidate;
     }
 
     /// <summary>
