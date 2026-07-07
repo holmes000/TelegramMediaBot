@@ -65,8 +65,18 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
                     continue;
                 }
 
-                _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → {Type} {Url}", host, shortcode, item.Type, item.Url);
-                return new IgMediaResult { Items = [item] };
+                // og:image is a cropped preview and covers only the first item.
+                // InstaFix-style hosts expose /images/{code}/{n} redirecting to
+                // the full-res originals — enumerate them for the real album.
+                var items = new List<IgMediaItem> { item };
+                if (item.Type == "image")
+                {
+                    var album = await EnumerateAlbumImagesAsync(baseUri, shortcode, ct);
+                    if (album.Count > 0) items = album;
+                }
+
+                _log.LogInformation("Embed fixer {Host} resolved {Shortcode} → {N} item/s ({Type})", host, shortcode, items.Count, item.Type);
+                return new IgMediaResult { Items = items };
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -100,6 +110,45 @@ public sealed partial class EmbedFixerStrategy : IIgStrategy
             return new IgMediaItem { Type = "image", Url = imageUrl };
 
         return null;
+    }
+
+    private const int MaxAlbumImages = 10;
+
+    /// <summary>
+    /// Walks the fixer's /images/{shortcode}/{n} endpoints, which redirect to
+    /// the full-resolution originals, until one is missing. Returns the final
+    /// (post-redirect) CDN URLs. Empty when the host doesn't support the
+    /// endpoint — the caller keeps the og:image preview in that case.
+    /// </summary>
+    private async Task<List<IgMediaItem>> EnumerateAlbumImagesAsync(Uri baseUri, string shortcode, CancellationToken ct)
+    {
+        var items = new List<IgMediaItem>();
+
+        for (var n = 1; n <= MaxAlbumImages; n++)
+        {
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUri, $"images/{shortcode}/{n}"));
+                request.Headers.TryAddWithoutValidation("User-Agent", BotUserAgent);
+
+                using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (!response.IsSuccessStatusCode) break;
+
+                var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
+                if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) break;
+
+                var finalUrl = response.RequestMessage?.RequestUri?.AbsoluteUri;
+                if (string.IsNullOrEmpty(finalUrl)) break;
+
+                items.Add(new IgMediaItem { Type = "image", Url = finalUrl });
+            }
+            catch
+            {
+                break;
+            }
+        }
+
+        return items;
     }
 
     /// <summary>

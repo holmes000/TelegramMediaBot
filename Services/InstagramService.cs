@@ -103,8 +103,11 @@ public sealed class InstagramService
                 // GraphQL) deliver the full, uncropped album.
                 if (!result.Authoritative && !result.Items.Any(i => i.Type == "video"))
                 {
-                    partialFallback ??= result;
-                    _log.LogInformation("Tier {Tier} returned a non-authoritative image-only result — held as fallback", tier.Name);
+                    // Keep the richest fallback (a fixer album beats a single preview).
+                    if (partialFallback is null || result.Items.Count > partialFallback.Items.Count)
+                        partialFallback = result;
+                    _log.LogInformation("Tier {Tier} returned a non-authoritative image-only result ({N} item/s) — held as fallback",
+                        tier.Name, result.Items.Count);
                     continue;
                 }
 

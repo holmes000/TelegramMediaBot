@@ -79,30 +79,7 @@ public sealed class GraphQlStrategy : IIgStrategy
                 return null;
             }
 
-            var items = new List<IgMediaItem>();
-
-            if (media.TryGetProperty("edge_sidecar_to_children", out var sidecar) &&
-                sidecar.TryGetProperty("edges", out var edges))
-            {
-                foreach (var edge in edges.EnumerateArray())
-                    if (edge.TryGetProperty("node", out var node))
-                        AddNode(node, items);
-            }
-            else
-            {
-                AddNode(media, items);
-            }
-
-            string? caption = null;
-            if (media.TryGetProperty("edge_media_to_caption", out var capEdges) &&
-                capEdges.TryGetProperty("edges", out var capArr) &&
-                capArr.GetArrayLength() > 0 &&
-                capArr[0].TryGetProperty("node", out var capNode) &&
-                capNode.TryGetProperty("text", out var capText))
-            {
-                caption = capText.GetString();
-            }
-
+            var (items, caption) = IgGraphJson.ParseShortcodeMedia(media);
             if (items.Count == 0) return null;
 
             _docIds.ReportSuccess();
@@ -120,17 +97,4 @@ public sealed class GraphQlStrategy : IIgStrategy
         }
     }
 
-    private static void AddNode(JsonElement node, List<IgMediaItem> items)
-    {
-        var isVideo = node.TryGetProperty("is_video", out var iv) && iv.GetBoolean();
-
-        if (isVideo && node.TryGetProperty("video_url", out var vu) && vu.GetString() is { Length: > 0 } videoUrl)
-        {
-            items.Add(new IgMediaItem { Type = "video", Url = videoUrl });
-        }
-        else if (node.TryGetProperty("display_url", out var du) && du.GetString() is { Length: > 0 } displayUrl)
-        {
-            items.Add(new IgMediaItem { Type = "image", Url = displayUrl });
-        }
-    }
 }
