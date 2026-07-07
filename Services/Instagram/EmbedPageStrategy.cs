@@ -26,51 +26,63 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
     {
         if (request.Shortcode is not { } shortcode) return null;
 
-        try
+        // Instagram alternates between serving the real embed (with the full
+        // contextJSON) and a login wall on a per-request basis, so a single
+        // cheap retry makes this tier far more consistent.
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var httpRequest = new HttpRequestMessage(HttpMethod.Get,
-                $"https://www.instagram.com/p/{shortcode}/embed/captioned/");
-            httpRequest.Headers.Referrer = new Uri("https://www.instagram.com/");
-
-            using var response = await _http.SendAsync(httpRequest, ct);
-            if (!response.IsSuccessStatusCode)
+            try
             {
-                _log.LogWarning("Instagram embed page returned HTTP {Code}", (int)response.StatusCode);
-                return null;
-            }
+                var httpRequest = new HttpRequestMessage(HttpMethod.Get,
+                    $"https://www.instagram.com/p/{shortcode}/embed/captioned/");
+                httpRequest.Headers.Referrer = new Uri("https://www.instagram.com/");
 
-            var html = await response.Content.ReadAsStringAsync(ct);
+                using var response = await _http.SendAsync(httpRequest, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _log.LogWarning("Instagram embed page returned HTTP {Code}", (int)response.StatusCode);
+                    return null;
+                }
 
-            // Best case: the page embeds the full GraphQL data (contextJSON) —
-            // every carousel child and real video URLs, no guessing.
-            var (jsonItems, caption) = ParseContextJson(html);
-            if (jsonItems.Count > 0)
-            {
-                _log.LogInformation("Instagram embed page contextJSON resolved {N} item/s", jsonItems.Count);
-                return new IgMediaResult { Items = jsonItems, Caption = caption, Authoritative = true };
-            }
+                var html = await response.Content.ReadAsStringAsync(ct);
 
-            var (item, authoritative) = ParseEmbedMedia(html, request.RequireVideo);
+                // Best case: the page embeds the full GraphQL data (contextJSON) —
+                // every carousel child and real video URLs, no guessing.
+                var (jsonItems, caption) = ParseContextJson(html);
+                if (jsonItems.Count > 0)
+                {
+                    _log.LogInformation("Instagram embed page contextJSON resolved {N} item/s", jsonItems.Count);
+                    return new IgMediaResult { Items = jsonItems, Caption = caption, Authoritative = true };
+                }
 
-            if (item is null)
-            {
+                var (item, authoritative) = ParseEmbedMedia(html, request.RequireVideo);
+                if (item is not null)
+                    return new IgMediaResult { Items = [item], Authoritative = authoritative };
+
+                if (attempt == 1)
+                {
+                    _log.LogInformation("Instagram embed page had no usable media (likely login wall) — retrying once");
+                    await Task.Delay(300, ct);
+                    continue;
+                }
+
                 _log.LogWarning("Instagram embed page returned HTTP 200 but no usable media " +
                     "(login/challenge wall, or a video post whose embed only exposes the thumbnail)");
                 return null;
             }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _log.LogWarning("Instagram embed page timed out");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Instagram embed page failed: {Msg}", ex.Message);
+                return null;
+            }
+        }
 
-            return new IgMediaResult { Items = [item], Authoritative = authoritative };
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _log.LogWarning("Instagram embed page timed out");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning("Instagram embed page failed: {Msg}", ex.Message);
-            return null;
-        }
+        return null;
     }
 
     /// <summary>

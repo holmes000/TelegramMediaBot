@@ -94,7 +94,22 @@ public sealed class InstagramService
                 continue;
             }
 
-            var result = await tier.TryFetchAsync(request, ct);
+            // Per-tier time budget so one slow tier (e.g. Cobalt walking dead
+            // public instances) can't eat the whole request. Once a usable
+            // fallback is in hand, remaining tiers get a short budget only.
+            using var tierCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            tierCts.CancelAfter(partialFallback is null ? TimeSpan.FromSeconds(40) : TimeSpan.FromSeconds(15));
+
+            IgMediaResult? result = null;
+            try
+            {
+                result = await tier.TryFetchAsync(request, tierCts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _log.LogWarning("Tier {Tier} hit its time budget — moving on", tier.Name);
+            }
+
             if (result is { Items.Count: > 0 })
             {
                 // Image-only results from tiers that didn't fully resolve the
@@ -144,7 +159,10 @@ public sealed class InstagramService
         {
             try
             {
-                var result = await tier.TryFetchAsync(request, ct);
+                using var tierCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                tierCts.CancelAfter(TimeSpan.FromSeconds(40));
+
+                var result = await tier.TryFetchAsync(request, tierCts.Token);
                 var ok = result is { Items.Count: > 0 } &&
                          (result.Authoritative ||
                           result.Items.Any(i => i.Type == "video") ||
