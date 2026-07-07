@@ -40,6 +40,16 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
             }
 
             var html = await response.Content.ReadAsStringAsync(ct);
+
+            // Best case: the page embeds the full GraphQL data (contextJSON) —
+            // every carousel child and real video URLs, no guessing.
+            var (jsonItems, caption) = ParseContextJson(html);
+            if (jsonItems.Count > 0)
+            {
+                _log.LogInformation("Instagram embed page contextJSON resolved {N} item/s", jsonItems.Count);
+                return new IgMediaResult { Items = jsonItems, Caption = caption, Authoritative = true };
+            }
+
             var (item, authoritative) = ParseEmbedMedia(html, request.RequireVideo);
 
             if (item is null)
@@ -60,6 +70,45 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
         {
             _log.LogWarning("Instagram embed page failed: {Msg}", ex.Message);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Extracts the full media set from the contextJSON blob embedded in the
+    /// page's scripts (the same shortcode_media JSON the GraphQL API returns,
+    /// double-escaped inside a string literal). Present on most embeds; when
+    /// Instagram serves a login wall it's absent and we fall back to markup.
+    /// </summary>
+    public static (List<IgMediaItem> Items, string? Caption) ParseContextJson(string html)
+    {
+        try
+        {
+            var match = ContextJsonRegex().Match(html);
+            if (!match.Success) return ([], null);
+
+            var json = JsonSerializer.Deserialize<string>($"\"{match.Groups[1].Value}\"");
+            if (string.IsNullOrEmpty(json)) return ([], null);
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            JsonElement media = default;
+            var found =
+                (root.TryGetProperty("gql_data", out var gql) &&
+                 gql.ValueKind == JsonValueKind.Object &&
+                 gql.TryGetProperty("shortcode_media", out media)) ||
+                (root.TryGetProperty("graphql", out var graphql) &&
+                 graphql.ValueKind == JsonValueKind.Object &&
+                 graphql.TryGetProperty("shortcode_media", out media)) ||
+                root.TryGetProperty("shortcode_media", out media);
+
+            if (!found || media.ValueKind != JsonValueKind.Object) return ([], null);
+
+            return IgGraphJson.ParseShortcodeMedia(media);
+        }
+        catch
+        {
+            return ([], null);
         }
     }
 
@@ -110,4 +159,7 @@ public sealed partial class EmbedPageStrategy : IIgStrategy
 
     [GeneratedRegex("data-media-type=\"([^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex MediaTypeRegex();
+
+    [GeneratedRegex("\"contextJSON\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")]
+    private static partial Regex ContextJsonRegex();
 }
